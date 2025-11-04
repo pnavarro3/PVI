@@ -26,6 +26,8 @@ int IN4 = 6;
 
 int margen = 10;
 int peso;
+int valor;
+bool flag = false;
 
 
 void setup() {
@@ -42,7 +44,7 @@ void setup() {
   InstVirtPA.RegisterCommand(F(":VACiar"), &vaciar);
   InstVirtPA.RegisterCommand(F(":LLEnar"), &llenar);
   InstVirtPA.RegisterCommand(F(":PARar"), &parar);
-  //InstVirtPA.RegisterCommand(F(":CONsigna"), &consigna);
+  InstVirtPA.RegisterCommand(F(":CONsigna#"), &consigna);
   InstVirtPA.RegisterCommand(F(":TARCAL"), &tarar);
   InstVirtPA.SetCommandTreeBase(F("STATus"));
   InstVirtPA.RegisterCommand(F(":VOLumen?"), &medir);
@@ -62,63 +64,69 @@ void setup() {
   digitalWrite(IN2, LOW);
   digitalWrite(IN3, HIGH);
   digitalWrite(IN4, LOW);
+
+
 }
 
 void loop() {
   InstVirtPA.ProcessInput(Serial, "\n");
-}
 
-void serialEvent() {
-  entradaSerial = "";
-  while (Serial.available()) {
-    char inChar = (char)Serial.read();
-    entradaSerial += inChar;
-    if (inChar == '\n') {
-      entradaCompleta = true;
-    }
+    if (flag) {
+      if (peso > valor + margen) {
+        analogWrite(ENA1, 255);
+        analogWrite(ENA2, 0);
+      } 
+        else if (peso < valor - margen) {
+        analogWrite(ENA2, 255);
+        analogWrite(ENA1, 0);
+      } 
+        else {
+        analogWrite(ENA1, 0);
+        analogWrite(ENA2, 0);
+      }
+    peso = balanza.get_units(10);
   }
 }
-/*void identificar(SCPI_C commands, SCPI_P parameters, Stream& interface) {
-  interface.println(F("Arduino 2.3.6 Instrumento virtual V3 PA"));
-}*/
-
 
 void identificar(SCPI_C commands, SCPI_P parameters, Stream& interface) {
-  interface.println(F("Vrekrer,Configuration options example,#00," 
-                      VREKRER_SCPI_VERSION));
+  flag = false;
+  interface.println("Arduino 2.3.6 Instrumento virtual V3 PA");
 }
 
 void llenar(SCPI_C commands, SCPI_P parameters, Stream& interface) {
+  flag = false;
   analogWrite(ENA2, 255);
   analogWrite(ENA1, 0);
+  interface.println("Llenando");
 }
 void vaciar(SCPI_C commands, SCPI_P parameters, Stream& interface) {
+  flag = false;
   analogWrite(ENA1, 255);
   analogWrite(ENA2, 0);
+  interface.println("Vaciando");
 }
 void parar(SCPI_C commands, SCPI_P parameters, Stream& interface) {
+  flag = false;
   analogWrite(ENA1, 0);
   analogWrite(ENA2, 0);
+  interface.println("Parar");
 }
 void tarar(SCPI_C commands, SCPI_P parameters, Stream& interface) {
-  balanza.tare(20);
-  //Pesar un algo con un valor conocido para establecer una nueva escala
+  flag = false;
+  analogWrite(ENA1, 0);
+  analogWrite(ENA2, 0);
   balanza.set_scale(738);
+  balanza.tare(20);
+  interface.println("Calibrado");
 }
 void medir(SCPI_C commands, SCPI_P parameters, Stream& interface) {
   peso = balanza.get_units(10);
   interface.println(peso);
 }
-/*void consigna(SCPI_C commands, SCPI_P parameters, Stream& interface) {
-  int consigna = entradaSerial.toInt();
-  if (consigna != 0) {
-    if (peso > consigna + margen) {
-      vaciar();
-    } else if (peso < consigna - margen) {
-      llenar();
-    } else {
-      parar();
-    }
-  }
-}*/
+void consigna(SCPI_C commands, SCPI_P parameters, Stream& interface) {
+  if (parameters.Size() > 0) {  
+    valor = atoi(parameters[0]);
+    flag = true;
+  }  
+}
 
