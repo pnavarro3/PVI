@@ -66,6 +66,7 @@ void control_volumen() {
       analogWrite(ENA1, 0);
       analogWrite(ENA2, 0);
     }
+  peso = balanza.get_units(10);
   }
 }
 
