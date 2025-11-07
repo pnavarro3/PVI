@@ -14,10 +14,11 @@ except serial.SerialException as e:
 
 def enviar_comando(comando):
     ser.write((comando + "\n").encode('utf-8'))
-    time.sleep(3)      #darle una vuelta para ver como optimizar
+    time.sleep(3)  # Espera a que Arduino escriba en el buffer
+
     respuesta = ser.readline().decode('utf-8').strip()
-    if respuesta:
-        print(f"→ Respuesta: {respuesta}")      #se puede replantear de tal manera que primero se reciba un ACK y que luego lea lo que sea necesario
+    if not respuesta:
+        print("No se recibió respuesta del dispositivo.")
 
 def menu():
     print("\n=== CONTROL SCPI ARDUINO ===")
@@ -62,4 +63,5 @@ while True:
         break
     
     else:
-        print("❌ Opción no válida. Intenta otra vez.")
+        print("Opción no válida. Intenta otra vez.")
+
