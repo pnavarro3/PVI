@@ -17,8 +17,6 @@ int margen = 10;
 int peso;
 int valor;
 bool flag = false;
-bool flag_ciclos = false;
-int contador = 0;
 
 void setup() {
   Serial.begin(9600);
@@ -31,7 +29,6 @@ void setup() {
   InstVirtPA.RegisterCommand(F(":LLEnar"), &llenar);
   InstVirtPA.RegisterCommand(F(":PARar"), &parar);
   InstVirtPA.RegisterCommand(F(":CONsigna#"), &consigna);
-  InstVirtPA.RegisterCommand(F(":CIClos#"), &ciclos);
   InstVirtPA.RegisterCommand(F(":TARCAL"), &tarar);
   InstVirtPA.SetCommandTreeBase(F("STATus"));
   InstVirtPA.RegisterCommand(F(":VOLumen?"), &medir);
@@ -54,7 +51,6 @@ void setup() {
 void loop() {
   InstVirtPA.ProcessInput(Serial, "\n");
   control_volumen();
-  nciclos();
 }
 
 void control_volumen() {
@@ -69,19 +65,6 @@ void control_volumen() {
     } else {
       analogWrite(ENA1, 0);
       analogWrite(ENA2, 0);
-    }
-  peso = balanza.get_units(10);
-  }
-}
-
-void nciclos(){
-  peso = balanza.getunits(10);
-  
-  if((contador < n_ciclos) && flag_ciclos){
-    if(peso <= 0 + margen){
-      llenar();
-    }else if(peso >= 1000 + margen){
-      vaciar()
     }
   }
 }
@@ -131,14 +114,7 @@ void consigna(SCPI_C commands, SCPI_P parameters, Stream& interface) {
     valor = atoi(parameters[0]);
     flag = true;
     interface.println("ACK");
-  }
-}
-
-void ciclos(SCPI_C commands, SCPI_P parameters, Stream& interface){
-  if (parameter.Size() > 0){
-    n_ciclos = atoi(parameters[0]);
-    flag_ciclos = true;
-    contador = 0;
-    interface.println("ACK");
+  } else {
+    interface.println("ERR");
   }
 }

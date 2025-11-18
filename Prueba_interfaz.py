@@ -2,7 +2,7 @@ import serial
 import time
 
 # Configuración del puerto
-puerto = 'COM4'
+puerto = 'COM3'
 baudios = 9600
 
 try:
