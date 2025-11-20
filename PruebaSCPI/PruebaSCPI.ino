@@ -17,6 +17,10 @@ int margen = 10;
 int peso;
 int valor;
 bool flag = false;
+int num_ciclos = 0;
+int ciclos_completados = 0;
+bool en_ciclo = false;
+bool llenando = true;
 
 void setup() {
   Serial.begin(9600);
@@ -26,10 +30,11 @@ void setup() {
 
   InstVirtPA.SetCommandTreeBase(F("STATus:OPERation"));
   InstVirtPA.RegisterCommand(F(":VACiar"), &vaciar);
-  InstVirtPA.RegisterCommand(F(":LLEnar"), &llenar);
+  InstVirtPA.RegisterCommand(F(":LLENar"), &llenar);
   InstVirtPA.RegisterCommand(F(":PARar"), &parar);
   InstVirtPA.RegisterCommand(F(":CONsigna#"), &consigna);
   InstVirtPA.RegisterCommand(F(":TARCAL"), &tarar);
+  InstVirtPA.RegisterCommand(F(":CIClos#"), &ciclos);
   InstVirtPA.SetCommandTreeBase(F("STATus"));
   InstVirtPA.RegisterCommand(F(":VOLumen?"), &medir);
   InstVirtPA.SetCommandTreeBase(F("SYSTem"));
@@ -51,10 +56,11 @@ void setup() {
 void loop() {
   InstVirtPA.ProcessInput(Serial, "\n");
   control_volumen();
+  control_ciclos();
 }
 
 void control_volumen() {
-  if (flag) {
+  if (flag && !en_ciclo) {
     peso = balanza.get_units(10);
     if (peso > valor + margen) {
       analogWrite(ENA1, 255);
@@ -69,12 +75,52 @@ void control_volumen() {
   }
 }
 
+void control_ciclos() {
+  if (en_ciclo) {
+    peso = balanza.get_units(10);
+    
+    if (llenando) {
+      if (peso < 600 - margen) {
+        analogWrite(ENA2, 255);
+        analogWrite(ENA1, 0);
+      } else if (peso > 600 + margen) {
+        analogWrite(ENA2, 0);
+        analogWrite(ENA1, 255);
+      } else {
+        analogWrite(ENA1, 0);
+        analogWrite(ENA2, 0);
+        llenando = false;
+      }
+    } else {
+      if (peso > margen) {
+        analogWrite(ENA1, 255);
+        analogWrite(ENA2, 0);
+      } else if (peso < -margen) {
+        analogWrite(ENA1, 0);
+        analogWrite(ENA2, 255);
+      } else {
+        analogWrite(ENA1, 0);
+        analogWrite(ENA2, 0);
+        ciclos_completados++;
+        
+        if (ciclos_completados < num_ciclos) {
+          llenando = true;
+        } else {
+          en_ciclo = false;
+        }
+      }
+    }
+  }
+}
+
 void identificar(SCPI_C commands, SCPI_P parameters, Stream& interface) {
+  en_ciclo = false;
   flag = false;
   interface.println("Arduino 2.3.6 Instrumento virtual V3 PA");
 }
 
 void llenar(SCPI_C commands, SCPI_P parameters, Stream& interface) {
+  en_ciclo = false;
   flag = false;
   analogWrite(ENA2, 255);
   analogWrite(ENA1, 0);
@@ -82,6 +128,7 @@ void llenar(SCPI_C commands, SCPI_P parameters, Stream& interface) {
 }
 
 void vaciar(SCPI_C commands, SCPI_P parameters, Stream& interface) {
+  en_ciclo = false;
   flag = false;
   analogWrite(ENA1, 255);
   analogWrite(ENA2, 0);
@@ -89,6 +136,7 @@ void vaciar(SCPI_C commands, SCPI_P parameters, Stream& interface) {
 }
 
 void parar(SCPI_C commands, SCPI_P parameters, Stream& interface) {
+  en_ciclo = false;
   flag = false;
   analogWrite(ENA1, 0);
   analogWrite(ENA2, 0);
@@ -96,6 +144,7 @@ void parar(SCPI_C commands, SCPI_P parameters, Stream& interface) {
 }
 
 void tarar(SCPI_C commands, SCPI_P parameters, Stream& interface) {
+  en_ciclo = false;
   flag = false;
   analogWrite(ENA1, 0);
   analogWrite(ENA2, 0);
@@ -113,6 +162,19 @@ void consigna(SCPI_C commands, SCPI_P parameters, Stream& interface) {
   if (parameters.Size() > 0) {
     valor = atoi(parameters[0]);
     flag = true;
+    interface.println("ACK");
+  } else {
+    interface.println("ERR");
+  }
+}
+
+void ciclos(SCPI_C commands, SCPI_P parameters, Stream& interface) {
+  if (parameters.Size() > 0) {
+    num_ciclos = atoi(parameters[0]);
+    ciclos_completados = 0;
+    en_ciclo = true;
+    llenando = true;
+    flag = false;
     interface.println("ACK");
   } else {
     interface.println("ERR");

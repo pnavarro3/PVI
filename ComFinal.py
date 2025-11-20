@@ -4,9 +4,7 @@ import threading
 import numpy as np
 import redpitaya_scpi as scpi
 
-# =============================
-# CONFIGURACIÓN ARDUINO (PRINCIPAL)
-# =============================
+# CONFIGURACIÓN ARDUINO
 puerto = 'COM3'
 baudios = 9600
 
@@ -28,10 +26,7 @@ def enviar_comando(comando, etiqueta=None):
     else:
         print("No se recibió respuesta del dispositivo.")
 
-
-# =============================
 # MENÚ PRINCIPAL
-# =============================
 def menu():
     print("\n=== CONTROL SCPI ARDUINO ===")
     print("1. Identificar dispositivo")
@@ -41,14 +36,11 @@ def menu():
     print("5. Tara / Calibrar")
     print("6. Medir peso/volumen (incluye RedPitaya)")
     print("7. Enviar consigna")
-    print("8. Salir")
+    print("8. Ciclos de llenado/vaciado")
+    print("9. Salir")
     return input("Selecciona una opción: ")
 
-
-# =============================
 # MEDICIÓN RED PITAYA EN SEGUNDO PLANO
-# =============================
-
 IP = "rp-f082af.local"
 rp = scpi.scpi(IP)
 
@@ -91,9 +83,8 @@ def medir_redpitaya():
                 if rp.rx_txt() == '1':
                     break
 
-            # *** DIFERENCIA CRÍTICA ***
             # Dar tiempo a que el buffer realmente tenga las 100k muestras
-            time.sleep(0.07)
+            time.sleep(0.3)
 
             # Leer buffer de la Red Pitaya
             rp.tx_txt('ACQ:SOUR1:DATA:TRIG? 100000,PRE_POST_TRIG')
@@ -123,10 +114,7 @@ def medir_redpitaya():
 thread_rp = threading.Thread(target=medir_redpitaya, daemon=True)
 thread_rp.start()
 
-
-# =============================
 # BUCLE PRINCIPAL (ARDUINO)
-# =============================
 while True:
     opcion = menu()
 
@@ -156,6 +144,10 @@ while True:
         enviar_comando(f"STATus:OPERation:CONsigna {valor}")
     
     elif opcion == "8":
+        num_ciclos = input("Introduce número de ciclos: ")
+        enviar_comando(f"STATus:OPERation:CIClos {num_ciclos}")
+    
+    elif opcion == "9":
         print("Cerrando conexión y terminando programa...")
         running = False
         rp.close()
