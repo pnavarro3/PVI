@@ -41,7 +41,8 @@ def menu():
     print("5. Tara / Calibrar")
     print("6. Medir peso/volumen (incluye RedPitaya)")
     print("7. Enviar consigna")
-    print("8. Salir")
+    print("8. Ciclos de llenado/vaciado")
+    print("9. Salir")
     return input("Selecciona una opción: ")
 
 
@@ -156,6 +157,10 @@ while True:
         enviar_comando(f"STATus:OPERation:CONsigna {valor}")
     
     elif opcion == "8":
+        num_ciclos = input("Introduce número de ciclos: ")
+        enviar_comando(f"STATus:OPERation:CIClos {num_ciclos}")
+    
+    elif opcion == "9":
         print("Cerrando conexión y terminando programa...")
         running = False
         rp.close()
