@@ -7,6 +7,9 @@ app = dash.Dash(__name__)
 # Layout
 app.layout = html.Div([
     html.H1("Sistema de control de volumen"),
+
+    # dcc.Interval(id='interval-peso', interval=2000, disabled=True),  # 1 segundo, desactivado inicialmente
+    # dcc.Store(id='store-llenando', data=False),  # Almacena el estado
     
     html.Div([
         dcc.Tabs(id='tabs-example-1', value='tab-1', children=[
@@ -140,6 +143,57 @@ def render_content(tab):
         return render_tab2()
     elif tab == 'tab-3':
         return render_tab3()
+
+# Callback que controla inicio y parada
+# @app.callback(
+#     Output('interval-peso', 'disabled'),
+#     [Input('button-llenar', 'n_clicks'),
+#      Input('button-vaciar', 'n_clicks'),
+#      Input('button-stop', 'n_clicks')],
+#     prevent_initial_call=True
+# )
+# def controlar_interval(n_llenar, n_vaciar, n_stop):
+#     ctx = dash.callback_context
+#     if not ctx.triggered:
+#         return True
+    
+#     button_id = ctx.triggered[0]['prop_id'].split('.')[0]
+    
+#     if button_id == 'button-llenar':
+#         # mi_funcion_llenar()  # Activa tu función de llenado
+#         return False  # Activa interval
+#     elif button_id == 'button-vaciar':
+#         #funcion_vaciado()
+#         return False #Activa interval
+#     elif button_id == 'button-stop':
+#         # mi_funcion_parar()  # Activa tu función de parada
+#         return True   # Desactiva interval
+#     return True
+
+# @app.callback(
+#     Output('peso-bascula', 'children'),
+#     Output('valor-condensador','children'),
+#     Output('tank-fill','style'),
+#     Input('interval-peso', 'n_intervals'),
+#     prevent_initial_call=True
+# )
+# def actualizar_peso(n_intervals):
+#     # peso = tu_funcion_leer_peso()  # Tu función de la librería
+#     # valor_rc = funcion_lee_redPitaya() 
+#     if peso > 0 && peso <= 200
+#            estilo = {'height': '25%', 'backgroundColor': '#3498db'}
+#     elif peso > 200 && peso <= 400
+#            estilo = {'height': '50%', 'backgroundColor': '#3498db'}
+#     elif peso > 400 && peso < 600
+#            estilo = {'height': '75%', 'backgroundColor': '#3498db'}
+#     elif peso <= 0
+#            estilo = {'height': '0%', 'backgroundColor': '#3498db'}
+#     elif peso >= 600
+#            estilo = {'height': '100%', 'backgroundColor': '#3498db'}
+#     return f"{peso} kg",f"{valor_rc}",estilo
+
+#Añadir el callback para tarar, el cual llamaria a la funcion tarar de la libreria
+#y la salida debe ser que sea 0 todas las medidas "peso-bascula","medida-rc" y "PesoCircuitoRC"
 
 if __name__ == '__main__':
     app.run(debug=True)
