@@ -15,6 +15,7 @@ int IN4 = 6;
 
 int margen = 10;
 int peso;
+int pesomedir;
 int valor;
 bool flag = false;
 int num_ciclos = 0;
@@ -29,14 +30,14 @@ void setup() {
   balanza.tare(20);
 
   InstVirtPA.SetCommandTreeBase(F("STATus:OPERation"));
-  InstVirtPA.RegisterCommand(F(":VACiar"), &vaciar);
   InstVirtPA.RegisterCommand(F(":LLENar"), &llenar);
+  InstVirtPA.RegisterCommand(F(":VACiar"), &vaciar);
   InstVirtPA.RegisterCommand(F(":PARar"), &parar);
   InstVirtPA.RegisterCommand(F(":CONsigna#"), &consigna);
   InstVirtPA.RegisterCommand(F(":TARCAL"), &tarar);
   InstVirtPA.RegisterCommand(F(":CIClos#"), &ciclos);
-  InstVirtPA.SetCommandTreeBase(F("STATus"));
-  InstVirtPA.RegisterCommand(F(":VOLumen?"), &medir);
+  InstVirtPA.SetCommandTreeBase(F("ESTAdo"));
+  InstVirtPA.RegisterCommand(F(":MEDicion?"), &medir);
   InstVirtPA.SetCommandTreeBase(F("SYSTem"));
   InstVirtPA.RegisterCommand(F(":VERSion?"), &identificar);
 

@@ -5,19 +5,19 @@ import numpy as np
 import redpitaya_scpi as scpi
 
 # CONFIGURACIÓN ARDUINO
-puerto = 'COM3'
+puerto = 'COM7'
 baudios = 9600
 
 try:
     ser = serial.Serial(puerto, baudios, timeout=1)
-    time.sleep(2)
+    time.sleep(1)
 except serial.SerialException as e:
     print(f"Error al abrir el puerto serial: {e}")
     exit()
 
 def enviar_comando(comando, etiqueta=None):
     ser.write((comando + "\n").encode('utf-8'))
-    time.sleep(3)
+    time.sleep(0.3)
 
     respuesta = ser.readline().decode('utf-8').strip()
     if respuesta:
@@ -134,7 +134,7 @@ while True:
         enviar_comando("STATus:OPERation:TARCAL")
     
     elif opcion == "6":
-        enviar_comando("STATus:VOLumen?", etiqueta="Peso")
+        enviar_comando("ESTAdo:MEDicion?", etiqueta="Peso")
 
         # Mostrar también la integral de la Red Pitaya
         print(f"RedPitaya - Integral del rango 2000–9000: {valor_integral}")
