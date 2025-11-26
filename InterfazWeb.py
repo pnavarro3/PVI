@@ -1,5 +1,59 @@
 import dash
 from dash import dcc, html, Input, Output
+import ComWeb as com
+import serial
+import time
+import threading
+import numpy as np
+import redpitaya_scpi as scpi
+
+#CONFIGURACIÓN PUERTO SERIAL
+puerto = 'COM7'
+baudios = 9600
+
+                #Quitar comentarios para probar con el circuito
+#try:
+#    ser = serial.Serial(puerto, baudios, timeout=1)
+#    time.sleep(1)
+#except serial.SerialException as e:
+#    print(f"Error al abrir el puerto serial: {e}")
+ser = None
+
+#CONFIGURACIÓN RED PITAYA
+IP = "rp-f082af.local"
+rp = None
+try:
+    rp = scpi.scpi(IP)
+    # Configuración inicial Red Pitaya
+    rp.tx_txt('GEN:RST')
+    rp.tx_txt('SOUR1:FUNC SINE')
+    rp.tx_txt('SOUR1:FREQ:FIX 2000')
+    rp.tx_txt('SOUR1:VOLT 1')
+    rp.tx_txt('OUTPUT1:STATE ON')
+    rp.tx_txt('SOUR1:TRIG:INT')
+    rp.tx_txt('ACQ:SOUR1:GAIN HV')
+except Exception as e:
+    print(f"Error al conectar Red Pitaya: {e}")
+    rp = None
+
+running = True
+valor_integral = 0.0
+
+#Funciones locales
+
+def estilo_tanque(nivel_porcentaje):
+    return {
+        'width': '100%',
+        'height': f'{nivel_porcentaje}%',
+        'backgroundColor': '#3498db',
+        'position': 'absolute',
+        'bottom': '0',
+        'transition': 'height 0.3s'
+    }
+
+# Lanzar el hilo en background
+thread_rp = threading.Thread(target=com.medir_redpitaya, daemon=True)
+thread_rp.start()
 
 # Crear la aplicación
 app = dash.Dash(__name__)
@@ -8,8 +62,8 @@ app = dash.Dash(__name__)
 app.layout = html.Div([
     html.H1("Sistema de control de volumen"),
 
-    # dcc.Interval(id='interval-peso', interval=2000, disabled=True),  # 1 segundo, desactivado inicialmente
-    # dcc.Store(id='store-llenando', data=False),  # Almacena el estado
+    dcc.Interval(id='interval-peso', interval=2000, disabled=True),  # 1 segundo, desactivado inicialmente
+    dcc.Store(id='store-llenando', data=False),  # Almacena el estado
     
     html.Div([
         dcc.Tabs(id='tabs-example-1', value='tab-1', children=[
@@ -145,55 +199,63 @@ def render_content(tab):
         return render_tab3()
 
 # Callback que controla inicio y parada
-# @app.callback(
-#     Output('interval-peso', 'disabled'),
-#     [Input('button-llenar', 'n_clicks'),
-#      Input('button-vaciar', 'n_clicks'),
-#      Input('button-stop', 'n_clicks')],
-#     prevent_initial_call=True
-# )
-# def controlar_interval(n_llenar, n_vaciar, n_stop):
-#     ctx = dash.callback_context
-#     if not ctx.triggered:
-#         return True
+@app.callback(
+    Output('interval-peso', 'disabled'),
+    [Input('button-llenar', 'n_clicks'),
+     Input('button-vaciar', 'n_clicks'),
+     Input('button-stop', 'n_clicks')],
+    prevent_initial_call=True
+)
+def controlar_interval(n_llenar, n_vaciar, n_stop):
+    ctx = dash.callback_context
+    if not ctx.triggered:
+        return True
     
-#     button_id = ctx.triggered[0]['prop_id'].split('.')[0]
+    button_id = ctx.triggered[0]['prop_id'].split('.')[0]
     
-#     if button_id == 'button-llenar':
-#         # mi_funcion_llenar()  # Activa tu función de llenado
-#         return False  # Activa interval
-#     elif button_id == 'button-vaciar':
-#         #funcion_vaciado()
-#         return False #Activa interval
-#     elif button_id == 'button-stop':
-#         # mi_funcion_parar()  # Activa tu función de parada
-#         return True   # Desactiva interval
-#     return True
+    if button_id == 'button-llenar':
+        com.comando_llenar()  # Activa tu función de llenado
+        return False  # Activa interval
+    elif button_id == 'button-vaciar':
+        com.comando_vaciar()
+        return False #Activa interval
+    elif button_id == 'button-stop':
+        com.comando_parar()  # Activa tu función de parada
+        return True   # Desactiva interval
+    return True
 
-# @app.callback(
-#     Output('peso-bascula', 'children'),
-#     Output('valor-condensador','children'),
-#     Output('tank-fill','style'),
-#     Input('interval-peso', 'n_intervals'),
-#     prevent_initial_call=True
-# )
-# def actualizar_peso(n_intervals):
-#     # peso = tu_funcion_leer_peso()  # Tu función de la librería
-#     # valor_rc = funcion_lee_redPitaya() 
-#     if peso > 0 && peso <= 200
-#            estilo = {'height': '25%', 'backgroundColor': '#3498db'}
-#     elif peso > 200 && peso <= 400
-#            estilo = {'height': '50%', 'backgroundColor': '#3498db'}
-#     elif peso > 400 && peso < 600
-#            estilo = {'height': '75%', 'backgroundColor': '#3498db'}
-#     elif peso <= 0
-#            estilo = {'height': '0%', 'backgroundColor': '#3498db'}
-#     elif peso >= 600
-#            estilo = {'height': '100%', 'backgroundColor': '#3498db'}
-#     return f"{peso} kg",f"{valor_rc}",estilo
+@app.callback(
+    Output('peso-bascula', 'children'),
+    Output('valor-condensador','children'),
+    Output('tank-fill','style'),
+    Input('interval-peso', 'n_intervals'),
+    prevent_initial_call=True
+)
+def actualizar_peso(n_intervals):
+    peso = com.leer_peso()  # Tu función de la librería
+    valor_rc = com.medir_redpitaya() 
+    if peso > 0 and peso <= 200:
+        estilo = estilo_tanque(25)
+    elif peso > 200 and peso <= 400:
+        estilo = estilo_tanque(50)
+    elif peso > 400 and peso < 600:
+        estilo = estilo_tanque(75)
+    elif peso <= 0:
+        estilo = estilo_tanque(0)
+    elif peso >= 600:
+        estilo = estilo_tanque(100)
+    return f"{peso} kg",f"{valor_rc}",estilo
 
 #Añadir el callback para tarar, el cual llamaria a la funcion tarar de la libreria
 #y la salida debe ser que sea 0 todas las medidas "peso-bascula","medida-rc" y "PesoCircuitoRC"
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    try:
+        app.run(debug=True)
+    except KeyboardInterrupt:
+        print("Cerrando aplicación...")
+        running = False
+        if ser:
+            ser.close()
+        if rp:
+            rp.close()
