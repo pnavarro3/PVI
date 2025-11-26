@@ -11,12 +11,12 @@ import redpitaya_scpi as scpi
 puerto = 'COM7'
 baudios = 9600
 
-                #Quitar comentarios para probar con el circuito
-#try:
-#    ser = serial.Serial(puerto, baudios, timeout=1)
-#    time.sleep(1)
-#except serial.SerialException as e:
-#    print(f"Error al abrir el puerto serial: {e}")
+#Quitar comentarios para probar con el circuito
+try:
+   ser = serial.Serial(puerto, baudios, timeout=1)
+   time.sleep(1)
+except serial.SerialException as e:
+   print(f"Error al abrir el puerto serial: {e}")
 ser = None
 
 #CONFIGURACIÓN RED PITAYA
@@ -214,13 +214,13 @@ def controlar_interval(n_llenar, n_vaciar, n_stop):
     button_id = ctx.triggered[0]['prop_id'].split('.')[0]
     
     if button_id == 'button-llenar':
-        com.comando_llenar()  # Activa tu función de llenado
+        com.comando_llenar(ser)  # Activa tu función de llenado
         return False  # Activa interval
     elif button_id == 'button-vaciar':
-        com.comando_vaciar()
+        com.comando_vaciar(ser)
         return False #Activa interval
     elif button_id == 'button-stop':
-        com.comando_parar()  # Activa tu función de parada
+        com.comando_parar(ser)  # Activa tu función de parada
         return True   # Desactiva interval
     return True
 
@@ -232,8 +232,8 @@ def controlar_interval(n_llenar, n_vaciar, n_stop):
     prevent_initial_call=True
 )
 def actualizar_peso(n_intervals):
-    peso = com.leer_peso()  # Tu función de la librería
-    valor_rc = com.medir_redpitaya() 
+    peso = com.leer_peso(ser)  # Tu función de la librería
+    valor_rc = com.medir_redpitaya(running) 
     if peso > 0 and peso <= 200:
         estilo = estilo_tanque(25)
     elif peso > 200 and peso <= 400:

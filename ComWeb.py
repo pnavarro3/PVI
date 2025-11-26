@@ -7,7 +7,7 @@ import numpy as np
 import redpitaya_scpi as scpi
 
 #FUNCIONES DE COMANDOS
-def enviar_comando(comando, etiqueta=None):
+def enviar_comando(comando,ser, etiqueta=None):
     """Envía comando al Arduino y recibe respuesta"""
     if ser is None:
         print("Conexión serial no disponible")
@@ -28,33 +28,33 @@ def enviar_comando(comando, etiqueta=None):
         print(f"Error al enviar comando: {e}")
         return None
 
-def comando_llenar():
+def comando_llenar(ser):
     print("Ejecutando: LLENAR")
-    enviar_comando("STATus:OPERation:LLEnar")
+    enviar_comando("STATus:OPERation:LLEnar",ser)
 
-def comando_vaciar():
+def comando_vaciar(ser):
     print("Ejecutando: VACIAR")
-    enviar_comando("STATus:OPERation:VACiar")
+    enviar_comando("STATus:OPERation:VACiar",ser)
 
-def comando_parar():
+def comando_parar(ser):
     print("Ejecutando: PARAR")
-    enviar_comando("STATus:OPERation:PARar")
+    enviar_comando("STATus:OPERation:PARar",ser)
 
-def comando_tarar():
+def comando_tarar(ser):
     print("Ejecutando: TARAR")
-    enviar_comando("STATus:OPERation:TARCAL")
+    enviar_comando("STATus:OPERation:TARCAL",ser)
 
 #Mirar como diferenciamos tarar de calibrar
 #def comando_calibrar():
 #    print("Ejecutando: CALIBRAR")
 #    enviar_comando("STATus:OPERation:CALibrar")
 
-def leer_peso():
-    respuesta = enviar_comando("ESTAdo:MEDicion?", etiqueta="Peso")
+def leer_peso(ser):
+    respuesta = enviar_comando("ESTAdo:MEDicion?",ser, etiqueta="Peso")
     return respuesta if respuesta else "N/A"
 
 #Hilo de medición Red Pitaya (Comprobar que no bloquea)
-def medir_redpitaya():
+def medir_redpitaya(running):
     global valor_integral, rp
 
     while running:
