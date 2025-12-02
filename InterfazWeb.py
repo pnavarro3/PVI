@@ -8,7 +8,7 @@ import numpy as np
 import redpitaya_scpi as scpi
 
 #CONFIGURACIÓN PUERTO SERIAL
-puerto = 'COM7'
+puerto = 'COM4'
 baudios = 9600
 
 #Quitar comentarios para probar con el circuito
@@ -17,7 +17,7 @@ try:
    time.sleep(1)
 except serial.SerialException as e:
    print(f"Error al abrir el puerto serial: {e}")
-ser = None
+
 
 #CONFIGURACIÓN RED PITAYA
 IP = "rp-f082af.local"
@@ -37,9 +37,57 @@ except Exception as e:
     rp = None
 
 running = True
-valor_integral = 0.0
 
 #Funciones locales
+def medir_redpitaya():
+    """Hilo secundario: mide cada segundo sin imprimir y sin bloquear."""
+    global valor_integral
+
+    while running:
+        try:
+            # Configurar adquisición
+            rp.tx_txt('ACQ:RST')
+            rp.tx_txt('ACQ:DEC 16')
+            rp.tx_txt('ACQ:START')
+            rp.tx_txt('ACQ:TRIG NOW')
+
+            # Esperar trigger
+            while True:
+                rp.tx_txt('ACQ:TRIG:STAT?')
+                if rp.rx_txt() == 'TD':
+                    break
+
+            # Esperar llenado de memoria
+            while True:
+                rp.tx_txt('ACQ:TRIG:FILL?')
+                if rp.rx_txt() == '1':
+                    break
+
+            # Dar tiempo a que el buffer realmente tenga las 100k muestras
+            time.sleep(0.3)
+
+            # Leer buffer de la Red Pitaya
+            rp.tx_txt('ACQ:SOUR1:DATA:TRIG? 100000,PRE_POST_TRIG')
+            buff_string = rp.rx_txt()
+            buff_string = buff_string.strip('{}\n\r').replace("  ", "").split(',')
+            buff = np.array(list(map(float, buff_string)))
+
+            # Tomar rango equivalente al código original
+            rango = buff[2000:9000]
+
+            # Media del rango
+            media = np.mean(rango)
+
+            # Señal centrada solo en rango
+            rango_centrado = rango - media
+
+            # Integral absoluta
+            valor_integral = np.sum(np.abs(rango_centrado))
+
+        except Exception:
+            pass
+
+        time.sleep(1)
 
 def estilo_tanque(nivel_porcentaje):
     return {
@@ -52,7 +100,7 @@ def estilo_tanque(nivel_porcentaje):
     }
 
 # Lanzar el hilo en background
-thread_rp = threading.Thread(target=com.medir_redpitaya, daemon=True)
+thread_rp = threading.Thread(target=medir_redpitaya, daemon=True)
 thread_rp.start()
 
 # Crear la aplicación
@@ -233,18 +281,25 @@ def controlar_interval(n_llenar, n_vaciar, n_stop):
 )
 def actualizar_peso(n_intervals):
     peso = com.leer_peso(ser)  # Tu función de la librería
-    valor_rc = com.medir_redpitaya(running) 
-    if peso > 0 and peso <= 200:
+    valor_rc = valor_integral  # Usar la variable global en lugar de llamar la función
+    
+    # Convertir peso a float para las comparaciones
+    try:
+        peso_num = float(peso) if peso != "N/A" else 0
+    except:
+        peso_num = 0
+    
+    if peso_num > 0 and peso_num <= 200:
         estilo = estilo_tanque(25)
-    elif peso > 200 and peso <= 400:
+    elif peso_num > 200 and peso_num <= 400:
         estilo = estilo_tanque(50)
-    elif peso > 400 and peso < 600:
+    elif peso_num > 400 and peso_num < 600:
         estilo = estilo_tanque(75)
-    elif peso <= 0:
+    elif peso_num <= 0:
         estilo = estilo_tanque(0)
-    elif peso >= 600:
+    elif peso_num >= 600:
         estilo = estilo_tanque(100)
-    return f"{peso} kg",f"{valor_rc}",estilo
+    return f"{peso} kg",f"{valor_rc:.2f}",estilo
 
 #Añadir el callback para tarar, el cual llamaria a la funcion tarar de la libreria
 #y la salida debe ser que sea 0 todas las medidas "peso-bascula","medida-rc" y "PesoCircuitoRC"

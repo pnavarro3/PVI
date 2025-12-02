@@ -22,6 +22,8 @@ int num_ciclos = 0;
 int ciclos_completados = 0;
 bool en_ciclo = false;
 bool llenando = true;
+unsigned long ultimo_muestreo = 0;
+const unsigned long intervalo_muestreo = 1000; // 1 segundo
 
 void setup() {
   Serial.begin(9600);
@@ -38,6 +40,7 @@ void setup() {
   InstVirtPA.RegisterCommand(F(":CIClos#"), &ciclos);
   InstVirtPA.SetCommandTreeBase(F("ESTAdo"));
   InstVirtPA.RegisterCommand(F(":MEDicion?"), &medir);
+  InstVirtPA.RegisterCommand(F(":ENCiclo?"), &en_ciclo_query);
   InstVirtPA.SetCommandTreeBase(F("SYSTem"));
   InstVirtPA.RegisterCommand(F(":VERSion?"), &identificar);
 
@@ -78,36 +81,40 @@ void control_volumen() {
 
 void control_ciclos() {
   if (en_ciclo) {
-    peso = balanza.get_units(10);
+    unsigned long tiempo_actual = millis();
     
-    if (llenando) {
-      if (peso < 600 - margen) {
-        analogWrite(ENA2, 255);
-        analogWrite(ENA1, 0);
-      } else if (peso > 600 + margen) {
-        analogWrite(ENA2, 0);
-        analogWrite(ENA1, 255);
-      } else {
-        analogWrite(ENA1, 0);
-        analogWrite(ENA2, 0);
-        llenando = false;
-      }
-    } else {
-      if (peso > margen) {
-        analogWrite(ENA1, 255);
-        analogWrite(ENA2, 0);
-      } else if (peso < -margen) {
-        analogWrite(ENA1, 0);
-        analogWrite(ENA2, 255);
-      } else {
-        analogWrite(ENA1, 0);
-        analogWrite(ENA2, 0);
-        ciclos_completados++;
-        
-        if (ciclos_completados < num_ciclos) {
-          llenando = true;
+    // Solo medir cada 200ms para no bloquear el serial
+    if (tiempo_actual - ultimo_muestreo >= 200) {
+      ultimo_muestreo = tiempo_actual;
+      peso = balanza.get_units(10);
+      
+      if (llenando) {
+        // Llenar hasta alcanzar 600 + margen
+        if (peso < 600 + margen) {
+          analogWrite(ENA2, 255);
+          analogWrite(ENA1, 0);
         } else {
-          en_ciclo = false;
+          // Alcanzado el objetivo, parar y cambiar a vaciado
+          analogWrite(ENA1, 0);
+          analogWrite(ENA2, 0);
+          llenando = false;
+        }
+      } else {
+        // Vaciar hasta alcanzar 0 - margen
+        if (peso > 0 - margen) {
+          analogWrite(ENA1, 255);
+          analogWrite(ENA2, 0);
+        } else {
+          // Alcanzado el objetivo, parar y completar ciclo
+          analogWrite(ENA1, 0);
+          analogWrite(ENA2, 0);
+          ciclos_completados++;
+          
+          if (ciclos_completados < num_ciclos) {
+            llenando = true;
+          } else {
+            en_ciclo = false;
+          }
         }
       }
     }
@@ -176,8 +183,17 @@ void ciclos(SCPI_C commands, SCPI_P parameters, Stream& interface) {
     en_ciclo = true;
     llenando = true;
     flag = false;
+    ultimo_muestreo = millis();
     interface.println("ACK");
   } else {
     interface.println("ERR");
+  }
+}
+
+void en_ciclo_query(SCPI_C commands, SCPI_P parameters, Stream& interface) {
+  if (en_ciclo) {
+    interface.println("1");
+  } else {
+    interface.println("0");
   }
 }
