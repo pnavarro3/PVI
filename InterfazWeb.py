@@ -738,6 +738,8 @@ def proceso_control_automatico(n_intervals, n_limpiar, store_control, historial)
     
     ctx = dash.callback_context
     trigger_id = ctx.triggered[0]['prop_id'].split('.')[0]
+
+    #REVISAR. YA TENEMOS EL COMANDO DE CONSIGNA
     
     # Si se presiona limpiar gráfica
     if trigger_id == 'button-limpiar-grafica':

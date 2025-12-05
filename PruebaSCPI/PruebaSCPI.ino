@@ -156,7 +156,7 @@ void tarar(SCPI_C commands, SCPI_P parameters, Stream& interface) {
   flag = false;
   analogWrite(ENA1, 0);
   analogWrite(ENA2, 0);
-  balanza.set_scale(738);
+  balanza.set_scale(738); //Ajustar para el valor que se envie desde el callback sea el que aparece aqui. Ya veremos como
   balanza.tare(20);
   interface.println("ACK");
 }
