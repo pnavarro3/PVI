@@ -126,7 +126,7 @@ app.layout = html.Div([
 
     dcc.Interval(id='interval-peso', interval=2000, disabled=True),  # 1 segundo, desactivado inicialmente
     dcc.Interval(id='interval-calibracion', interval=1000, disabled=True),  # Para calibración
-    dcc.Interval(id='interval-control', interval=1000, disabled=True),  # Para control automático
+    dcc.Interval(id='interval-control', interval=2000, disabled=True),  # Para control automático
     dcc.Store(id='store-llenando', data=False),  # Almacena el estado
     dcc.Store(id='store-calibrando', data={'activo': False, 'num_medidas': 0, 'medida_actual': 0}),
     dcc.Store(id='store-control', data={'activo': False, 'sensor': 'bascula', 'consigna': 400}),
@@ -728,7 +728,7 @@ def controlar_sistema(n_iniciar, n_detener, sensor, consigna):
     
     button_id = ctx.triggered[0]['prop_id'].split('.')[0]
     
-    if button_id == 'button-iniciar-control':
+    if button_id == 'button-iniciar-control' and n_iniciar > 0:
         # Iniciar control
         if sensor == 'bascula':
             # Con báscula: Arduino hace el control automático
@@ -737,7 +737,7 @@ def controlar_sistema(n_iniciar, n_detener, sensor, consigna):
         # Con RC: la web hace el control (Arduino no puede leer RC directamente)
         return False, {'activo': True, 'sensor': sensor, 'consigna': consigna, 'tiempo_inicio': time.time()}
     
-    elif button_id == 'button-detener-control':
+    elif button_id == 'button-detener-control' and n_detener > 0:
         # Detener control (desactiva flag y para bombas)
         com.comando_parar(ser)
         return True, {'activo': False, 'sensor': sensor, 'consigna': consigna}
@@ -766,11 +766,9 @@ def proceso_control_automatico(n_intervals, n_limpiar, store_control, historial)
     
     ctx = dash.callback_context
     trigger_id = ctx.triggered[0]['prop_id'].split('.')[0]
-
-    #REVISAR. YA TENEMOS EL COMANDO DE CONSIGNA
     
     # Si se presiona limpiar gráfica
-    if trigger_id == 'button-limpiar-grafica':
+    if trigger_id == 'button-limpiar-grafica' and n_limpiar > 0:
         historial_limpio = {'tiempo': [], 'nivel': [], 'consigna': [], 'error': []}
         figura_vacia = {
             'data': [],
