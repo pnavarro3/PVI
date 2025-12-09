@@ -9,6 +9,8 @@ import threading
 import numpy as np
 import redpitaya_scpi as scpi
 from scipy.interpolate import interp1d, UnivariateSpline
+import os
+
 #CONFIGURACIÓN PUERTO SERIAL
 puerto = 'COM4'
 baudios = 9600
@@ -482,26 +484,31 @@ def render_content(tab):
 )
 def controlar_interval(n_llenar, n_vaciar, n_stop):
     ctx = dash.callback_context
+    if not ctx.triggered:
+        return dash.no_update
     
-    # Verificar que realmente hubo un trigger
-    if not ctx.triggered or ctx.triggered[0]['prop_id'] == '.':
-        return True
+    # Verificar que el trigger sea por un cambio en n_clicks, no por inicialización
+    trigger_prop = ctx.triggered[0]['prop_id']
+    if '.n_clicks' not in trigger_prop:
+        return dash.no_update
     
     button_id = ctx.triggered[0]['prop_id'].split('.')[0]
     
-    # Verificar que los clicks no sean None o 0
-    if button_id == 'button-llenar' and n_llenar and n_llenar > 0:
-        com.comando_llenar(ser)  # Activa tu función de llenado
+    # Verificar que realmente se hizo click (n_clicks > 0)
+    if n_llenar is None and n_vaciar is None and n_stop is None:
+        return dash.no_update
+    
+    if button_id == 'button-llenar' and n_llenar > 0:
+        com.comando_llenar(ser)
         return False  # Activa interval
-    elif button_id == 'button-vaciar' and n_vaciar and n_vaciar > 0:
+    elif button_id == 'button-vaciar' and n_vaciar > 0:
         com.comando_vaciar(ser)
-        return False #Activa interval
-    elif button_id == 'button-stop' and n_stop and n_stop > 0:
-        com.comando_parar(ser)  # Activa tu función de parada
+        return False  # Activa interval
+    elif button_id == 'button-stop' and n_stop > 0:
+        com.comando_parar(ser)
         return True   # Desactiva interval
     
-    # Por defecto, mantener interval desactivado
-    return True
+    return dash.no_update
 
 # Callback para tarar la báscula
 @app.callback(
@@ -537,7 +544,7 @@ def controlar_calibracion(n_run, n_stop, num_medidas, store_data):
     
     button_id = ctx.triggered[0]['prop_id'].split('.')[0]
     
-    if button_id == 'button-run-calibracion':
+    if button_id == 'button-run-calibracion' and n_run > 0:
         # Iniciar calibración
         datos_calibracion = []
         com.comando_vaciar(ser)  # Empezar desde vacío
@@ -546,7 +553,7 @@ def controlar_calibracion(n_run, n_stop, num_medidas, store_data):
         
         return False, {'activo': True, 'num_medidas': num_medidas, 'medida_actual': 0}
     
-    elif button_id == 'button-stop-calibracion':
+    elif button_id == 'button-stop-calibracion' and n_stop > 0:
         # Detener calibración
         com.comando_parar(ser)
         return True, {'activo': False, 'num_medidas': 0, 'medida_actual': 0}
@@ -989,22 +996,11 @@ def actualizar_peso_completo(n_intervals):
     else:
         peso_rc_str = "N/A"
     
-    # Convertir peso a float para las comparaciones
-    try:
-        peso_num = float(peso) if peso != "N/A" else 0
-    except:
-        peso_num = 0
-    
-    if peso_num > 0 and peso_num <= 200:
-        estilo = estilo_tanque(25)
-    elif peso_num > 200 and peso_num <= 400:
-        estilo = estilo_tanque(50)
-    elif peso_num > 400 and peso_num < 600:
-        estilo = estilo_tanque(75)
-    elif peso_num <= 0:
-        estilo = estilo_tanque(0)
-    elif peso_num >= 600:
-        estilo = estilo_tanque(100)
+    # Calcular porcentaje de llenado de forma continua
+    peso_maximo = 600  # Peso máximo del tanque en gramos
+    peso_num = float(peso) if peso != "N/A" else 0
+    porcentaje = min(100, max(0, (peso_num / peso_maximo) * 100))
+    estilo = estilo_tanque(porcentaje)
     
     return f"{peso} g", f"{valor_rc:.2f}", estilo, peso_rc_str
 
