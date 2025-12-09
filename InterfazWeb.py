@@ -8,7 +8,7 @@ import time
 import threading
 import numpy as np
 import redpitaya_scpi as scpi
-from scipy.optimize import curve_fit
+from scipy.interpolate import interp1d, UnivariateSpline
 
 #CONFIGURACIÓN PUERTO SERIAL
 puerto = 'COM4'
@@ -44,7 +44,8 @@ running = True
 # Variables para calibración RC
 datos_calibracion = []
 ajuste_realizado = False
-coeficientes_ajuste = None
+funcion_interpolacion = None  # Función de interpolación
+tipo_interpolacion_actual = None  # Tipo de interpolación usado
 
 #Funciones locales
 def medir_redpitaya():
@@ -271,20 +272,12 @@ def render_tab2():
             
             # Panel de ajuste
             html.Div([
-                html.H3('Función de Ajuste'),
+                html.H3('Función de Interpolación'),
                 html.Div([
-                    html.Label('Tipo de ajuste:', style={'fontWeight': 'bold', 'display': 'block', 'marginBottom': '5px'}),
-                    dcc.Dropdown(
-                        id='dropdown-tipo-ajuste',
-                        options=[
-                            {'label': 'Lineal (y = ax + b)', 'value': 'lineal'},
-                            {'label': 'Polinomial grado 2 (y = ax² + bx + c)', 'value': 'poly2'},
-                            {'label': 'Polinomial grado 3', 'value': 'poly3'}
-                        ],
-                        value='lineal',
-                        style={'marginBottom': '20px'}
-                    ),
-                    html.Button('Realizar Ajuste', id='button-ajuste', n_clicks=0,
+                    html.Label('Método:', style={'fontWeight': 'bold', 'display': 'block', 'marginBottom': '5px'}),
+                    html.P('Interpolación Lineal (scipy.interpolate.interp1d)', 
+                           style={'fontSize': '12px', 'color': '#7f8c8d', 'fontStyle': 'italic', 'marginBottom': '20px'}),
+                    html.Button('Realizar Interpolación', id='button-ajuste', n_clicks=0,
                                style={'width': '100%', 'padding': '15px', 'backgroundColor': '#3498db',
                                       'color': 'white', 'border': 'none', 'borderRadius': '5px',
                                       'fontSize': '16px', 'fontWeight': 'bold'}),
@@ -744,7 +737,7 @@ def controlar_sistema(n_iniciar, n_detener, sensor, consigna, histeresis):
     prevent_initial_call=True
 )
 def proceso_control_automatico(n_intervals, n_limpiar, store_control, historial):
-    global valor_integral, ajuste_realizado, coeficientes_ajuste
+    global valor_integral, ajuste_realizado, funcion_interpolacion
     
     ctx = dash.callback_context
     trigger_id = ctx.triggered[0]['prop_id'].split('.')[0]
@@ -794,8 +787,8 @@ def proceso_control_automatico(n_intervals, n_limpiar, store_control, historial)
         except:
             nivel_actual = 0
     else:  # sensor RC
-        if ajuste_realizado and coeficientes_ajuste is not None:
-            nivel_actual = np.polyval(coeficientes_ajuste, valor_integral)
+        if ajuste_realizado and funcion_interpolacion is not None:
+            nivel_actual = predecir_peso_desde_integral(valor_integral)
         else:
             nivel_actual = 0
     
@@ -887,55 +880,92 @@ def proceso_control_automatico(n_intervals, n_limpiar, store_control, historial)
     [Output('resultado-ajuste', 'children'),
      Output('peso-rc', 'children', allow_duplicate=True)],
     Input('button-ajuste', 'n_clicks'),
-    [State('dropdown-tipo-ajuste', 'value')],
     prevent_initial_call=True
 )
-def realizar_ajuste(n_clicks, tipo_ajuste):
-    global datos_calibracion, ajuste_realizado, coeficientes_ajuste
+def realizar_ajuste(n_clicks):
+    global datos_calibracion, ajuste_realizado, funcion_interpolacion, tipo_interpolacion_actual
     
-    if not datos_calibracion or len(datos_calibracion) < 3:
-        return "Error: Se necesitan al menos 3 medidas para realizar el ajuste", "N/A"
+    if not datos_calibracion or len(datos_calibracion) < 2:
+        return "Error: Se necesitan al menos 2 medidas para realizar la interpolación", "N/A"
     
     # Extraer datos
     pesos = np.array([d[0] for d in datos_calibracion])
     integrales = np.array([d[1] for d in datos_calibracion])
     
+    # Verificar que no haya valores duplicados en integrales (requerido para interpolación)
+    if len(np.unique(integrales)) < len(integrales):
+        return "Error: Hay valores de integral duplicados. Se necesitan valores únicos para interpolar.", "N/A"
+    
     try:
-        # Realizar ajuste según tipo seleccionado
-        if tipo_ajuste == 'lineal':
-            coeficientes_ajuste = np.polyfit(integrales, pesos, 1)
-            ecuacion = f"y = {coeficientes_ajuste[0]:.4f}x + {coeficientes_ajuste[1]:.4f}"
-            
-        elif tipo_ajuste == 'poly2':
-            coeficientes_ajuste = np.polyfit(integrales, pesos, 2)
-            ecuacion = f"y = {coeficientes_ajuste[0]:.4e}x² + {coeficientes_ajuste[1]:.4f}x + {coeficientes_ajuste[2]:.4f}"
-            
-        elif tipo_ajuste == 'poly3':
-            coeficientes_ajuste = np.polyfit(integrales, pesos, 3)
-            ecuacion = f"y = {coeficientes_ajuste[0]:.4e}x³ + {coeficientes_ajuste[1]:.4e}x² + {coeficientes_ajuste[2]:.4f}x + {coeficientes_ajuste[3]:.4f}"
+        # Ordenar los datos por integral (requerido para interpolación)
+        indices = np.argsort(integrales)
+        integrales_sorted = integrales[indices]
+        pesos_sorted = pesos[indices]
         
-        # Calcular R²
-        peso_pred = np.polyval(coeficientes_ajuste, integrales)
-        ss_res = np.sum((pesos - peso_pred) ** 2)
-        ss_tot = np.sum((pesos - np.mean(pesos)) ** 2)
+        # Crear interpolación lineal
+        funcion_interpolacion = interp1d(integrales_sorted, pesos_sorted, kind='linear', 
+                                        fill_value='extrapolate')
+        nombre_metodo = "Interpolación Lineal"
+        descripcion = "Conecta los puntos con líneas rectas (scipy.interpolate.interp1d)"
+        
+        # Calcular error de interpolación en los puntos conocidos
+        pesos_interpolados = funcion_interpolacion(integrales_sorted)
+        
+        # Calcular R² y error
+        ss_res = np.sum((pesos_sorted - pesos_interpolados) ** 2)
+        ss_tot = np.sum((pesos_sorted - np.mean(pesos_sorted)) ** 2)
         r_squared = 1 - (ss_res / ss_tot)
         
-        ajuste_realizado = True
+        rmse = np.sqrt(np.mean((pesos_sorted - pesos_interpolados) ** 2))
+        max_error = np.max(np.abs(pesos_sorted - pesos_interpolados))
         
-        # Calcular peso RC actual
-        peso_rc_actual = np.polyval(coeficientes_ajuste, valor_integral)
+        ajuste_realizado = True
+        tipo_interpolacion_actual = 'linear'
+        
+        # Calcular peso RC actual usando interpolación
+        peso_rc_actual = predecir_peso_desde_integral(valor_integral)
         
         resultado = html.Div([
-            html.H4('Ajuste Realizado', style={'color': '#27ae60'}),
-            html.P(f"Ecuación: {ecuacion}", style={'fontSize': '12px'}),
-            html.P(f"R² = {r_squared:.4f}", style={'fontWeight': 'bold'}),
+            html.H4('Interpolación Completada', style={'color': '#27ae60'}),
+            html.P(f"Método: {nombre_metodo}", style={'fontSize': '13px', 'fontWeight': 'bold'}),
+            html.P(descripcion, style={'fontSize': '11px', 'fontStyle': 'italic', 'color': '#7f8c8d'}),
+            html.Div([
+                html.P(f"R² = {r_squared:.6f}", style={'fontWeight': 'bold', 'display': 'inline-block', 'marginRight': '15px'}),
+                html.P(f"RMSE = {rmse:.4f} g", style={'display': 'inline-block', 'marginRight': '15px'}),
+                html.P(f"Error máx = {max_error:.4f} g", style={'display': 'inline-block'})
+            ]),
+            html.P(f"Puntos interpolados: {len(datos_calibracion)}", style={'fontSize': '11px'}),
             html.P("✓ Peso RC habilitado en Setup", style={'color': '#27ae60', 'fontWeight': 'bold'})
         ])
         
         return resultado, f"{peso_rc_actual:.2f} g"
         
     except Exception as e:
-        return f"Error al realizar ajuste: {str(e)}", "N/A"
+        return f"Error al realizar interpolación: {str(e)}", "N/A"
+
+def predecir_peso_desde_integral(integral_valor):
+    """Función que usa la interpolación para predecir peso desde integral."""
+    global funcion_interpolacion, datos_calibracion
+    
+    if funcion_interpolacion is None:
+        return 0
+    
+    try:
+        # Usar directamente la función de interpolación
+        integrales_conocidas = np.array([d[1] for d in datos_calibracion])
+        
+        # Verificar si está dentro del rango
+        if integral_valor < integrales_conocidas.min() or integral_valor > integrales_conocidas.max():
+            # Extrapolación (puede ser menos precisa)
+            peso = float(funcion_interpolacion(integral_valor))
+        else:
+            # Interpolación (más precisa)
+            peso = float(funcion_interpolacion(integral_valor))
+        
+        return peso
+    except Exception as e:
+        print(f"Error en predicción: {e}")
+        return 0
 
 # Modificar callback de actualizar_peso para incluir peso RC si hay ajuste
 @app.callback(
@@ -947,14 +977,14 @@ def realizar_ajuste(n_clicks, tipo_ajuste):
     prevent_initial_call=True
 )
 def actualizar_peso_completo(n_intervals):
-    global ajuste_realizado, coeficientes_ajuste, valor_integral
+    global ajuste_realizado, funcion_interpolacion, valor_integral
     
     peso = com.leer_peso(ser)
     valor_rc = valor_integral
     
     # Calcular peso RC si hay ajuste
-    if ajuste_realizado and coeficientes_ajuste is not None:
-        peso_rc = np.polyval(coeficientes_ajuste, valor_rc)
+    if ajuste_realizado and funcion_interpolacion is not None:
+        peso_rc = predecir_peso_desde_integral(valor_rc)
         peso_rc_str = f"{peso_rc:.2f} g"
     else:
         peso_rc_str = "N/A"
