@@ -127,8 +127,9 @@ app.layout = html.Div([
     dcc.Interval(id='interval-control', interval=1000, disabled=True),  # Para control automático
     dcc.Store(id='store-llenando', data=False),  # Almacena el estado
     dcc.Store(id='store-calibrando', data={'activo': False, 'num_medidas': 0, 'medida_actual': 0}),
-    dcc.Store(id='store-control', data={'activo': False, 'sensor': 'bascula', 'consigna': 400, 'histeresis': 20}),
+    dcc.Store(id='store-control', data={'activo': False, 'sensor': 'bascula', 'consigna': 400}),
     dcc.Store(id='store-historial-control', data={'tiempo': [], 'nivel': [], 'consigna': [], 'error': []}),
+    dcc.Store(id='store-margen', data=10),  # Margen fijo del Arduino
     
     html.Div([
         dcc.Tabs(id='tabs-example-1', value='tab-1', children=[
@@ -358,14 +359,7 @@ def render_tab3():
                     html.Label('Consigna de peso (g):', style={'fontWeight': 'bold', 'display': 'block', 'marginBottom': '5px'}),
                     dcc.Input(id='input-consigna', type='number', value=400, min=0, max=800,
                              style={'width': '100%', 'padding': '8px', 'marginBottom': '20px'}),
-                ]),
-                
-                # Histéresis
-                html.Div([
-                    html.Label('Histéresis (g):', style={'fontWeight': 'bold', 'display': 'block', 'marginBottom': '5px'}),
-                    dcc.Input(id='input-histeresis', type='number', value=20, min=5, max=100, step=5,
-                             style={'width': '100%', 'padding': '8px', 'marginBottom': '20px'}),
-                    html.P('La histéresis evita oscilaciones del controlador', 
+                    html.P('El Arduino usa un margen de ±10g para el control', 
                            style={'fontSize': '11px', 'color': '#7f8c8d', 'fontStyle': 'italic'})
                 ]),
                 
@@ -705,27 +699,40 @@ def actualizar_info_sensor(tab):
     [Input('button-iniciar-control', 'n_clicks'),
      Input('button-detener-control', 'n_clicks')],
     [State('dropdown-sensor', 'value'),
-     State('input-consigna', 'value'),
-     State('input-histeresis', 'value')],
+     State('input-consigna', 'value')],
     prevent_initial_call=True
 )
-def controlar_sistema(n_iniciar, n_detener, sensor, consigna, histeresis):
+def controlar_sistema(n_iniciar, n_detener, sensor, consigna):
     ctx = dash.callback_context
     if not ctx.triggered:
-        return True, {'activo': False, 'sensor': sensor, 'consigna': consigna, 'histeresis': histeresis}
+        return True, {'activo': False, 'sensor': sensor, 'consigna': consigna}
     
     button_id = ctx.triggered[0]['prop_id'].split('.')[0]
     
     if button_id == 'button-iniciar-control':
         # Iniciar control
-        return False, {'activo': True, 'sensor': sensor, 'consigna': consigna, 'histeresis': histeresis, 'tiempo_inicio': time.time()}
+        if sensor == 'bascula':
+            # Con báscula: Arduino hace el control automático
+            com.comando_consigna(consigna, ser)
+            time.sleep(0.2)
+        # Con RC: la web hace el control (Arduino no puede leer RC directamente)
+        return False, {'activo': True, 'sensor': sensor, 'consigna': consigna, 'tiempo_inicio': time.time()}
     
     elif button_id == 'button-detener-control':
-        # Detener control
+        # Detener control (desactiva flag y para bombas)
         com.comando_parar(ser)
-        return True, {'activo': False, 'sensor': sensor, 'consigna': consigna, 'histeresis': histeresis}
+        return True, {'activo': False, 'sensor': sensor, 'consigna': consigna}
     
-    return True, {'activo': False, 'sensor': sensor, 'consigna': consigna, 'histeresis': histeresis}
+    return True, {'activo': False, 'sensor': sensor, 'consigna': consigna}
+
+# Callback para limpiar gráfica
+@app.callback(
+    Output('store-historial-control', 'data', allow_duplicate=True),
+    Input('button-limpiar-grafica', 'n_clicks'),
+    prevent_initial_call=True
+)
+def limpiar_grafica(n_clicks):
+    return {'tiempo': [], 'nivel': [], 'consigna': [], 'error': []}
 
 # Callback principal del control automático
 @app.callback(
@@ -786,7 +793,7 @@ def proceso_control_automatico(n_intervals, n_limpiar, store_control, historial)
     # Leer nivel según sensor seleccionado
     sensor = store_control.get('sensor', 'bascula')
     consigna = store_control.get('consigna', 400)
-    histeresis = store_control.get('histeresis', 20)
+    margen = 10  # Margen fijo del Arduino
     
     if sensor == 'bascula':
         peso_str = com.leer_peso(ser)
@@ -803,29 +810,11 @@ def proceso_control_automatico(n_intervals, n_limpiar, store_control, historial)
     # Calcular error
     error = consigna - nivel_actual
     
-    # Lógica de control con histéresis
-    accion = "NINGUNA"
-    estilo_accion = {'padding': '15px', 'backgroundColor': '#ecf0f1', 'borderRadius': '5px', 
-                     'textAlign': 'center', 'fontSize': '18px', 'fontWeight': 'bold'}
-    
-    if error > histeresis:
-        # Nivel muy bajo, llenar
-        com.comando_llenar(ser)
-        accion = "LLENANDO ↑"
-        estilo_accion['color'] = '#3498db'
-        estilo_accion['backgroundColor'] = '#d6eaf8'
-    elif error < -histeresis:
-        # Nivel muy alto, vaciar
-        com.comando_vaciar(ser)
-        accion = "VACIANDO ↓"
-        estilo_accion['color'] = '#e67e22'
-        estilo_accion['backgroundColor'] = '#fdebd0'
-    else:
-        # Dentro del rango de histéresis, mantener
-        com.comando_parar(ser)
-        accion = "MANTENIENDO ✓"
-        estilo_accion['color'] = '#27ae60'
-        estilo_accion['backgroundColor'] = '#d5f4e6'
+    # El Arduino maneja el control automáticamente
+    # Solo monitoreamos y mostramos el estado
+    accion = "CONTROL ARDUINO ACTIVO"
+    estilo_accion = {'padding': '15px', 'backgroundColor': '#d5f4e6', 'borderRadius': '5px', 
+                     'textAlign': 'center', 'fontSize': '18px', 'fontWeight': 'bold', 'color': '#27ae60'}
     
     # Calcular tiempo transcurrido
     tiempo_actual = time.time() - store_control.get('tiempo_inicio', time.time())
@@ -843,7 +832,7 @@ def proceso_control_automatico(n_intervals, n_limpiar, store_control, historial)
         historial['consigna'] = historial['consigna'][-100:]
         historial['error'] = historial['error'][-100:]
     
-    # Crear gráfica
+    # Crear gráfica con margen fijo de ±10g del Arduino
     figura = {
         'data': [
             go.Scatter(x=historial['tiempo'], y=historial['nivel'], 
@@ -852,17 +841,17 @@ def proceso_control_automatico(n_intervals, n_limpiar, store_control, historial)
             go.Scatter(x=historial['tiempo'], y=historial['consigna'],
                       mode='lines', name='Consigna',
                       line=dict(color='#27ae60', width=2, dash='dash')),
-            go.Scatter(x=historial['tiempo'], y=[c + histeresis for c in historial['consigna']],
-                      mode='lines', name='Límite Superior',
+            go.Scatter(x=historial['tiempo'], y=[c + margen for c in historial['consigna']],
+                      mode='lines', name='Límite Superior (+10g)',
                       line=dict(color='#95a5a6', width=1, dash='dot'),
                       showlegend=True),
-            go.Scatter(x=historial['tiempo'], y=[c - histeresis for c in historial['consigna']],
-                      mode='lines', name='Límite Inferior',
+            go.Scatter(x=historial['tiempo'], y=[c - margen for c in historial['consigna']],
+                      mode='lines', name='Límite Inferior (-10g)',
                       line=dict(color='#95a5a6', width=1, dash='dot'),
                       fill='tonexty', fillcolor='rgba(149, 165, 166, 0.1)')
         ],
         'layout': {
-            'title': 'Control de Nivel en Tiempo Real',
+            'title': 'Control de Nivel en Tiempo Real (Arduino)',
             'xaxis': {'title': 'Tiempo (s)'},
             'yaxis': {'title': 'Peso (g)'},
             'hovermode': 'x unified',
