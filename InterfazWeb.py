@@ -18,6 +18,9 @@ baudios = 9600
 try:
    ser = serial.Serial(puerto, baudios, timeout=2)
    time.sleep(1)
+   # Enviar comando de parada al iniciar para asegurar estado seguro
+   com.comando_parar(ser)
+   time.sleep(0.5)
 except serial.SerialException as e:
    print(f"Error al abrir el puerto serial: {e}")
 
@@ -485,20 +488,25 @@ def render_content(tab):
 )
 def controlar_interval(n_llenar, n_vaciar, n_stop):
     ctx = dash.callback_context
-    if not ctx.triggered:
+    
+    # Verificar que realmente hubo un trigger
+    if not ctx.triggered or ctx.triggered[0]['prop_id'] == '.':
         return True
     
     button_id = ctx.triggered[0]['prop_id'].split('.')[0]
     
-    if button_id == 'button-llenar':
+    # Verificar que los clicks no sean None o 0
+    if button_id == 'button-llenar' and n_llenar and n_llenar > 0:
         com.comando_llenar(ser)  # Activa tu función de llenado
         return False  # Activa interval
-    elif button_id == 'button-vaciar':
+    elif button_id == 'button-vaciar' and n_vaciar and n_vaciar > 0:
         com.comando_vaciar(ser)
         return False #Activa interval
-    elif button_id == 'button-stop':
+    elif button_id == 'button-stop' and n_stop and n_stop > 0:
         com.comando_parar(ser)  # Activa tu función de parada
         return True   # Desactiva interval
+    
+    # Por defecto, mantener interval desactivado
     return True
 
 #Añadir el callback para tarar, el cual llamaria a la funcion tarar de la libreria
