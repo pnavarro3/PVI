@@ -13,13 +13,17 @@ from scipy.interpolate import interp1d, UnivariateSpline
 #CONFIGURACIÓN PUERTO SERIAL
 puerto = 'COM4'
 baudios = 9600
+ser = None
 
-#Quitar comentarios para probar con el circuito
-try:
-   ser = serial.Serial(puerto, baudios, timeout=2)
-   time.sleep(1)
-except serial.SerialException as e:
-   print(f"Error al abrir el puerto serial: {e}")
+# Solo abrir puerto serial en el proceso principal (evitar doble apertura en debug mode)
+if not os.environ.get("WERKZEUG_RUN_MAIN"):
+    try:
+       ser = serial.Serial(puerto, baudios, timeout=2)
+       time.sleep(1)
+       print(f"✓ Puerto serial {puerto} conectado correctamente")
+    except serial.SerialException as e:
+       print(f"✗ Error al abrir el puerto serial: {e}")
+       ser = None
 
 
 #CONFIGURACIÓN RED PITAYA
@@ -172,7 +176,7 @@ def render_tab1():
                 html.Div([
                     html.Button('Tarar', id='button-tarar', n_clicks=0, 
                             style={'display': 'block', 'margin': '30px auto', 'padding': '10px 20px'}),
-                    html.Button('Calibrar', id='button-calibrar', n_clicks=0,
+                    html.Button('Escalar', id='button-calibrar', n_clicks=0,
                             style={'display': 'block', 'margin': '20px auto', 'padding': '10px 20px'}),
                 ])
             ], className='control-box', style={'display': 'inline-block', 'width': '300px','height': '175px', 'textAlign': 'center', 'verticalAlign': 'top'}),
@@ -501,8 +505,20 @@ def controlar_interval(n_llenar, n_vaciar, n_stop):
         return True   # Desactiva interval
     return True
 
-#Añadir el callback para tarar, el cual llamaria a la funcion tarar de la libreria
-#y la salida debe ser que sea 0 todas las medidas "peso-bascula","medida-rc" y "PesoCircuitoRC"
+# Callback para tarar la báscula
+@app.callback(
+    Output('peso-bascula', 'children', allow_duplicate=True),
+    Input('button-tarar', 'n_clicks'),
+    prevent_initial_call=True
+)
+def tarar_bascula(n_clicks):
+    if n_clicks > 0:
+        com.comando_tarar(ser)
+        time.sleep(0.5)  # Esperar a que se complete el tarado
+        peso = com.leer_peso(ser)
+        return f"{peso} g"
+    return dash.no_update
+
 
 # Callback para iniciar/detener calibración
 @app.callback(
@@ -1010,7 +1026,7 @@ def actualizar_peso_completo(n_intervals):
 
 if __name__ == '__main__':
     try:
-        app.run(debug=True)
+        app.run(debug=True, use_reloader=False)
     except KeyboardInterrupt:
         print("Cerrando aplicación...")
         running = False
