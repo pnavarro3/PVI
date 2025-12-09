@@ -16,7 +16,7 @@ baudios = 9600
 
 #Quitar comentarios para probar con el circuito
 try:
-   ser = serial.Serial(puerto, baudios, timeout=1)
+   ser = serial.Serial(puerto, baudios, timeout=2)
    time.sleep(1)
 except serial.SerialException as e:
    print(f"Error al abrir el puerto serial: {e}")
@@ -565,6 +565,14 @@ def proceso_calibracion(n_intervals, store_data):
     
     medida_actual = store_data['medida_actual']
     num_medidas = store_data['num_medidas']
+    peso_minimo = 0  # Tanque vacío
+    peso_maximo = 600  # Tanque lleno
+    
+    # Calcular el peso objetivo para esta medida (distribución uniforme)
+    if num_medidas > 1:
+        peso_objetivo = peso_minimo + (peso_maximo - peso_minimo) * medida_actual / (num_medidas - 1)
+    else:
+        peso_objetivo = peso_minimo
     
     # Si terminamos todas las medidas
     if medida_actual >= num_medidas:
@@ -600,43 +608,45 @@ def proceso_calibracion(n_intervals, store_data):
         
         return estado, tabla_datos, figura, {'activo': False, 'num_medidas': num_medidas, 'medida_actual': medida_actual}, True
     
-    # Proceso de llenado y medición
-    if medida_actual == 0:
-        # Primera medida: tanque vacío
-        peso_str = com.leer_peso(ser)
-        try:
-            peso = float(peso_str)
-            integral = valor_integral
-            datos_calibracion.append([peso, integral])
-            
-            # Iniciar llenado para siguiente medida
-            com.comando_llenar(ser)
-            
-        except ValueError:
-            pass
-    else:
-        # Medidas intermedias
-        tiempo_llenado = 3  # segundos entre medidas
+    # Leer peso actual
+    peso_str = com.leer_peso(ser)
+    try:
+        peso_actual = float(peso_str)
+    except ValueError:
+        peso_actual = 0
+    
+    margen = 10  # Margen de tolerancia en gramos
+    
+    # Verificar si hemos alcanzado el peso objetivo
+    if abs(peso_actual - peso_objetivo) <= margen:
+        # Tomar medida
+        integral = valor_integral
+        datos_calibracion.append([peso_actual, integral])
         
-        # Leer valores actuales
-        peso_str = com.leer_peso(ser)
-        try:
-            peso = float(peso_str)
-            integral = valor_integral
-            datos_calibracion.append([peso, integral])
-            
-            # Si no es la última medida, seguir llenando
-            if medida_actual < num_medidas - 1:
+        # Actualizar estado
+        store_data['medida_actual'] = medida_actual + 1
+        estado = f"Medida {medida_actual + 1} de {num_medidas} completada (Peso objetivo: {peso_objetivo:.0f}g)"
+        
+        # Si no es la última medida, calcular siguiente objetivo y ajustar
+        if medida_actual + 1 < num_medidas:
+            siguiente_objetivo = peso_minimo + (peso_maximo - peso_minimo) * (medida_actual + 1) / (num_medidas - 1)
+            if siguiente_objetivo > peso_actual:
                 com.comando_llenar(ser)
             else:
-                com.comando_parar(ser)
-                
-        except ValueError:
-            pass
-    
-    # Actualizar estado
-    store_data['medida_actual'] = medida_actual + 1
-    estado = f"Recolectando medida {medida_actual + 1} de {num_medidas}..."
+                com.comando_vaciar(ser)
+        else:
+            com.comando_parar(ser)
+    else:
+        # Ajustar nivel para alcanzar objetivo
+        if peso_actual < peso_objetivo - margen:
+            com.comando_llenar(ser)
+            estado = f"Llenando hacia medida {medida_actual + 1} (Actual: {peso_actual:.0f}g → Objetivo: {peso_objetivo:.0f}g)"
+        elif peso_actual > peso_objetivo + margen:
+            com.comando_vaciar(ser)
+            estado = f"Vaciando hacia medida {medida_actual + 1} (Actual: {peso_actual:.0f}g → Objetivo: {peso_objetivo:.0f}g)"
+        else:
+            com.comando_parar(ser)
+            estado = f"Ajustando para medida {medida_actual + 1} (Objetivo: {peso_objetivo:.0f}g)"
     
     # Preparar datos para visualización parcial
     tabla_datos = [
