@@ -725,15 +725,6 @@ def controlar_sistema(n_iniciar, n_detener, sensor, consigna):
     
     return True, {'activo': False, 'sensor': sensor, 'consigna': consigna}
 
-# Callback para limpiar gráfica
-@app.callback(
-    Output('store-historial-control', 'data', allow_duplicate=True),
-    Input('button-limpiar-grafica', 'n_clicks'),
-    prevent_initial_call=True
-)
-def limpiar_grafica(n_clicks):
-    return {'tiempo': [], 'nivel': [], 'consigna': [], 'error': []}
-
 # Callback principal del control automático
 @app.callback(
     [Output('estado-control', 'children'),
