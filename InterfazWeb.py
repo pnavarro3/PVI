@@ -9,22 +9,20 @@ import threading
 import numpy as np
 import redpitaya_scpi as scpi
 from scipy.interpolate import interp1d, UnivariateSpline
-import os
 
 #CONFIGURACIÓN PUERTO SERIAL
 puerto = 'COM4'
 baudios = 9600
-ser = None
 
-# Solo abrir puerto serial en el proceso principal (evitar doble apertura en debug mode)
-if not os.environ.get("WERKZEUG_RUN_MAIN"):
-    try:
-       ser = serial.Serial(puerto, baudios, timeout=2)
-       time.sleep(1)
-       print(f"✓ Puerto serial {puerto} conectado correctamente")
-    except serial.SerialException as e:
-       print(f"✗ Error al abrir el puerto serial: {e}")
-       ser = None
+#Quitar comentarios para probar con el circuito
+try:
+   ser = serial.Serial(puerto, baudios, timeout=2)
+   time.sleep(1)
+   # Enviar comando de parada al iniciar para asegurar estado seguro
+   com.comando_parar(ser)
+   time.sleep(0.5)
+except serial.SerialException as e:
+   print(f"Error al abrir el puerto serial: {e}")
 
 
 #CONFIGURACIÓN RED PITAYA
@@ -178,7 +176,7 @@ def render_tab1():
                 html.Div([
                     html.Button('Tarar', id='button-tarar', n_clicks=0, 
                             style={'display': 'block', 'margin': '30px auto', 'padding': '10px 20px'}),
-                    html.Button('Escalar', id='button-calibrar', n_clicks=0,
+                    html.Button('Calibrar', id='button-calibrar', n_clicks=0,
                             style={'display': 'block', 'margin': '20px auto', 'padding': '10px 20px'}),
                 ])
             ], className='control-box', style={'display': 'inline-block', 'width': '300px','height': '175px', 'textAlign': 'center', 'verticalAlign': 'top'}),
@@ -484,46 +482,29 @@ def render_content(tab):
 )
 def controlar_interval(n_llenar, n_vaciar, n_stop):
     ctx = dash.callback_context
-    if not ctx.triggered:
-        return dash.no_update
     
-    # Verificar que el trigger sea por un cambio en n_clicks, no por inicialización
-    trigger_prop = ctx.triggered[0]['prop_id']
-    if '.n_clicks' not in trigger_prop:
-        return dash.no_update
+    # Verificar que realmente hubo un trigger
+    if not ctx.triggered or ctx.triggered[0]['prop_id'] == '.':
+        return True
     
     button_id = ctx.triggered[0]['prop_id'].split('.')[0]
     
-    # Verificar que realmente se hizo click (n_clicks > 0)
-    if n_llenar is None and n_vaciar is None and n_stop is None:
-        return dash.no_update
-    
-    if button_id == 'button-llenar' and n_llenar > 0:
-        com.comando_llenar(ser)
+    # Verificar que los clicks no sean None o 0
+    if button_id == 'button-llenar' and n_llenar and n_llenar > 0:
+        com.comando_llenar(ser)  # Activa tu función de llenado
         return False  # Activa interval
-    elif button_id == 'button-vaciar' and n_vaciar > 0:
+    elif button_id == 'button-vaciar' and n_vaciar and n_vaciar > 0:
         com.comando_vaciar(ser)
-        return False  # Activa interval
-    elif button_id == 'button-stop' and n_stop > 0:
-        com.comando_parar(ser)
+        return False #Activa interval
+    elif button_id == 'button-stop' and n_stop and n_stop > 0:
+        com.comando_parar(ser)  # Activa tu función de parada
         return True   # Desactiva interval
     
-    return dash.no_update
+    # Por defecto, mantener interval desactivado
+    return True
 
-# Callback para tarar la báscula
-@app.callback(
-    Output('peso-bascula', 'children', allow_duplicate=True),
-    Input('button-tarar', 'n_clicks'),
-    prevent_initial_call=True
-)
-def tarar_bascula(n_clicks):
-    if n_clicks > 0:
-        com.comando_tarar(ser)
-        time.sleep(0.5)  # Esperar a que se complete el tarado
-        peso = com.leer_peso(ser)
-        return f"{peso} g"
-    return dash.no_update
-
+#Añadir el callback para tarar, el cual llamaria a la funcion tarar de la libreria
+#y la salida debe ser que sea 0 todas las medidas "peso-bascula","medida-rc" y "PesoCircuitoRC"
 
 # Callback para iniciar/detener calibración
 @app.callback(
@@ -544,7 +525,7 @@ def controlar_calibracion(n_run, n_stop, num_medidas, store_data):
     
     button_id = ctx.triggered[0]['prop_id'].split('.')[0]
     
-    if button_id == 'button-run-calibracion' and n_run > 0:
+    if button_id == 'button-run-calibracion':
         # Iniciar calibración
         datos_calibracion = []
         com.comando_vaciar(ser)  # Empezar desde vacío
@@ -553,7 +534,7 @@ def controlar_calibracion(n_run, n_stop, num_medidas, store_data):
         
         return False, {'activo': True, 'num_medidas': num_medidas, 'medida_actual': 0}
     
-    elif button_id == 'button-stop-calibracion' and n_stop > 0:
+    elif button_id == 'button-stop-calibracion':
         # Detener calibración
         com.comando_parar(ser)
         return True, {'activo': False, 'num_medidas': 0, 'medida_actual': 0}
@@ -802,7 +783,7 @@ def proceso_control_automatico(n_intervals, n_limpiar, store_control, historial)
     
     # Leer nivel según sensor seleccionado
     sensor = store_control.get('sensor', 'bascula')
-    consigna = store_control.get('consigna', 400)
+    consigna = store_control.get('consigna', 0) 
     margen = 10  # Margen fijo del Arduino
     
     if sensor == 'bascula':
@@ -996,17 +977,28 @@ def actualizar_peso_completo(n_intervals):
     else:
         peso_rc_str = "N/A"
     
-    # Calcular porcentaje de llenado de forma continua
-    peso_maximo = 600  # Peso máximo del tanque en gramos
-    peso_num = float(peso) if peso != "N/A" else 0
-    porcentaje = min(100, max(0, (peso_num / peso_maximo) * 100))
-    estilo = estilo_tanque(porcentaje)
+    # Convertir peso a float para las comparaciones
+    try:
+        peso_num = float(peso) if peso != "N/A" else 0
+    except:
+        peso_num = 0
+    
+    if peso_num > 0 and peso_num <= 200:
+        estilo = estilo_tanque(25)
+    elif peso_num > 200 and peso_num <= 400:
+        estilo = estilo_tanque(50)
+    elif peso_num > 400 and peso_num < 600:
+        estilo = estilo_tanque(75)
+    elif peso_num <= 0:
+        estilo = estilo_tanque(0)
+    elif peso_num >= 600:
+        estilo = estilo_tanque(100)
     
     return f"{peso} g", f"{valor_rc:.2f}", estilo, peso_rc_str
 
 if __name__ == '__main__':
     try:
-        app.run(debug=True, use_reloader=False)
+        app.run(debug=True)
     except KeyboardInterrupt:
         print("Cerrando aplicación...")
         running = False
