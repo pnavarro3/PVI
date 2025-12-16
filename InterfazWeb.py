@@ -125,7 +125,7 @@ app.layout = html.Div([
     html.H1("Sistema de control de volumen"),
 
     dcc.Interval(id='interval-peso', interval=2000, disabled=True),  # 1 segundo, desactivado inicialmente
-    dcc.Interval(id='interval-calibracion', interval=1000, disabled=True),  # Para calibración
+    dcc.Interval(id='interval-calibracion', interval=2000, disabled=True),  # Para calibración
     dcc.Interval(id='interval-control', interval=2000, disabled=True),  # Para control automático
     dcc.Store(id='store-llenando', data=False),  # Almacena el estado
     dcc.Store(id='store-calibrando', data={'activo': False, 'num_medidas': 0, 'medida_actual': 0}),
@@ -523,7 +523,37 @@ def tarar_bascula(n_clicks):
         peso = com.leer_peso(ser)
         return f"{peso} g"
     return dash.no_update
+# Modificar callback de actualizar_peso para incluir peso RC si hay ajuste
+@app.callback(
+    Output('peso-bascula', 'children'),
+    Output('valor-condensador','children'),
+    Output('tank-fill','style'),
+    Output('peso-rc', 'children'),
+    Input('interval-peso', 'n_intervals'),
+    prevent_initial_call=True
+)
+def actualizar_peso_completo(n_intervals):
+    global ajuste_realizado, funcion_interpolacion, valor_integral
+    
+    peso = com.leer_peso(ser)
+    valor_rc = valor_integral
+    
+    # Calcular peso RC si hay ajuste
+    if ajuste_realizado and funcion_interpolacion is not None:
+        peso_rc = predecir_peso_desde_integral(valor_rc)
+        peso_rc_str = f"{peso_rc:.2f} g"
+    else:
+        peso_rc_str = "N/A"
+    
+    # Calcular porcentaje de llenado de forma continua
+    peso_maximo = 600  # Peso máximo del tanque en gramos
+    peso_num = float(peso) if peso != "N/A" else 0
+    porcentaje = min(100, max(0, (peso_num / peso_maximo) * 100))
+    estilo = estilo_tanque(porcentaje)
+    
+    return f"{peso} g", f"{valor_rc:.2f}", estilo, peso_rc_str
 
+##########################################################################################
 
 # Callback para iniciar/detener calibración
 @app.callback(
@@ -536,7 +566,7 @@ def tarar_bascula(n_clicks):
     prevent_initial_call=True
 )
 def controlar_calibracion(n_run, n_stop, num_medidas, store_data):
-    global datos_calibracion
+    global datos_calibracion, primerVaciado
     
     ctx = dash.callback_context
     if not ctx.triggered:
@@ -545,11 +575,10 @@ def controlar_calibracion(n_run, n_stop, num_medidas, store_data):
     button_id = ctx.triggered[0]['prop_id'].split('.')[0]
     
     if button_id == 'button-run-calibracion' and n_run > 0:
-        # Iniciar calibración
+        # Iniciar calibración: calcular objetivos y empezar a vaciar
         datos_calibracion = []
         com.comando_vaciar(ser)  # Empezar desde vacío
-        time.sleep(2)
-        com.comando_parar(ser)
+        primerVaciado = True
         
         return False, {'activo': True, 'num_medidas': num_medidas, 'medida_actual': 0}
     
@@ -572,8 +601,23 @@ def controlar_calibracion(n_run, n_stop, num_medidas, store_data):
     prevent_initial_call=True
 )
 def proceso_calibracion(n_intervals, store_data):
-    global datos_calibracion, valor_integral
+    global datos_calibracion, valor_integral, primerVaciado, comienzaCiclos,llenando,vaciando
     
+    if primerVaciado:
+        peso_str = com.leer_peso(ser)
+        try:
+            peso_actual = float(peso_str)
+        except (ValueError, TypeError):
+            peso_actual = 0
+        
+        if peso_actual > 0:
+            com.comando_vaciar(ser)
+            return "Vaciando depósito...", [], {'data': [], 'layout': {'title': 'Peso Báscula vs Integral RC'}}, store_data, False
+        else:
+            com.comando_parar(ser)
+            primerVaciado = False
+            comienzaCiclos = True
+
     if not store_data['activo']:
         return "Esperando...", [], {'data': [], 'layout': {'title': 'Peso Báscula vs Integral RC'}}, store_data, True
     
@@ -588,6 +632,10 @@ def proceso_calibracion(n_intervals, store_data):
     else:
         peso_objetivo = peso_minimo
     
+    if comienzaCiclos: 
+        com.comando_llenar(ser)
+        llenando = True
+        comienzaCiclos = False
     # Si terminamos todas las medidas
     if medida_actual >= num_medidas:
         com.comando_parar(ser)
@@ -629,9 +677,9 @@ def proceso_calibracion(n_intervals, store_data):
     except ValueError:
         peso_actual = 0
     
-    margen = 10  # Margen de tolerancia en gramos
+    margen = 20  # Margen de tolerancia en gramos
     
-    # Verificar si hemos alcanzado el peso objetivo
+    # Verificar si hemos alcanzado el peso objetivo (con margen)
     if abs(peso_actual - peso_objetivo) <= margen:
         # Tomar medida
         integral = valor_integral
@@ -641,26 +689,27 @@ def proceso_calibracion(n_intervals, store_data):
         store_data['medida_actual'] = medida_actual + 1
         estado = f"Medida {medida_actual + 1} de {num_medidas} completada (Peso objetivo: {peso_objetivo:.0f}g)"
         
+        # 
         # Si no es la última medida, calcular siguiente objetivo y ajustar
         if medida_actual + 1 < num_medidas:
             siguiente_objetivo = peso_minimo + (peso_maximo - peso_minimo) * (medida_actual + 1) / (num_medidas - 1)
             if siguiente_objetivo > peso_actual:
                 com.comando_llenar(ser)
+                llenando = True
+                vaciando = False
             else:
                 com.comando_vaciar(ser)
+                vaciando = True
+                llenando = True
         else:
             com.comando_parar(ser)
     else:
         # Ajustar nivel para alcanzar objetivo
-        if peso_actual < peso_objetivo - margen:
-            com.comando_llenar(ser)
+        if llenando:
             estado = f"Llenando hacia medida {medida_actual + 1} (Actual: {peso_actual:.0f}g → Objetivo: {peso_objetivo:.0f}g)"
-        elif peso_actual > peso_objetivo + margen:
-            com.comando_vaciar(ser)
+        elif vaciando:
             estado = f"Vaciando hacia medida {medida_actual + 1} (Actual: {peso_actual:.0f}g → Objetivo: {peso_objetivo:.0f}g)"
-        else:
-            com.comando_parar(ser)
-            estado = f"Ajustando para medida {medida_actual + 1} (Objetivo: {peso_objetivo:.0f}g)"
+        
     
     # Preparar datos para visualización parcial
     tabla_datos = [
@@ -690,26 +739,101 @@ def proceso_calibracion(n_intervals, store_data):
     
     return estado, tabla_datos, figura, store_data, False
 
-# Callback para actualizar info de sensor disponible
+
+
+# Callback para realizar ajuste
 @app.callback(
-    [Output('info-sensor', 'children'),
-     Output('dropdown-sensor', 'options')],
-    Input('tabs-example-1', 'value')
+    [Output('resultado-ajuste', 'children'),
+     Output('peso-rc', 'children', allow_duplicate=True)],
+    Input('button-ajuste', 'n_clicks'),
+    prevent_initial_call=True
 )
-def actualizar_info_sensor(tab):
-    global ajuste_realizado
+def realizar_ajuste(n_clicks):
+    global datos_calibracion, ajuste_realizado, funcion_interpolacion, tipo_interpolacion_actual
     
-    opciones = [
-        {'label': 'Báscula', 'value': 'bascula'},
-        {'label': 'Circuito RC', 'value': 'rc', 'disabled': not ajuste_realizado}
-    ]
+    if not datos_calibracion or len(datos_calibracion) < 2:
+        return "Error: Se necesitan al menos 2 medidas para realizar la interpolación", "N/A"
     
-    if tab == 'tab-3':
-        if not ajuste_realizado:
-            return "⚠️ Circuito RC no disponible. Complete la calibración en la pestaña anterior.", opciones
+    # Extraer datos
+    pesos = np.array([d[0] for d in datos_calibracion])
+    integrales = np.array([d[1] for d in datos_calibracion])
+    
+    # Verificar que no haya valores duplicados en integrales (requerido para interpolación)
+    if len(np.unique(integrales)) < len(integrales):
+        return "Error: Hay valores de integral duplicados. Se necesitan valores únicos para interpolar.", "N/A"
+    
+    try:
+        # Ordenar los datos por integral (requerido para interpolación)
+        indices = np.argsort(integrales)
+        integrales_sorted = integrales[indices]
+        pesos_sorted = pesos[indices]
+        
+        # Crear interpolación lineal
+        funcion_interpolacion = interp1d(integrales_sorted, pesos_sorted, kind='linear', 
+                                        fill_value='extrapolate')
+        nombre_metodo = "Interpolación Lineal"
+        descripcion = "Conecta los puntos con líneas rectas (scipy.interpolate.interp1d)"
+        
+        # Calcular error de interpolación en los puntos conocidos
+        pesos_interpolados = funcion_interpolacion(integrales_sorted)
+        
+        # Calcular R² y error
+        ss_res = np.sum((pesos_sorted - pesos_interpolados) ** 2)
+        ss_tot = np.sum((pesos_sorted - np.mean(pesos_sorted)) ** 2)
+        r_squared = 1 - (ss_res / ss_tot)
+        
+        rmse = np.sqrt(np.mean((pesos_sorted - pesos_interpolados) ** 2))
+        max_error = np.max(np.abs(pesos_sorted - pesos_interpolados))
+        
+        ajuste_realizado = True
+        tipo_interpolacion_actual = 'linear'
+        
+        # Calcular peso RC actual usando interpolación
+        peso_rc_actual = predecir_peso_desde_integral(valor_integral)
+        
+        resultado = html.Div([
+            html.H4('Interpolación Completada', style={'color': '#27ae60'}),
+            html.P(f"Método: {nombre_metodo}", style={'fontSize': '13px', 'fontWeight': 'bold'}),
+            html.P(descripcion, style={'fontSize': '11px', 'fontStyle': 'italic', 'color': '#7f8c8d'}),
+            html.Div([
+                html.P(f"R² = {r_squared:.6f}", style={'fontWeight': 'bold', 'display': 'inline-block', 'marginRight': '15px'}),
+                html.P(f"RMSE = {rmse:.4f} g", style={'display': 'inline-block', 'marginRight': '15px'}),
+                html.P(f"Error máx = {max_error:.4f} g", style={'display': 'inline-block'})
+            ]),
+            html.P(f"Puntos interpolados: {len(datos_calibracion)}", style={'fontSize': '11px'}),
+            html.P("✓ Peso RC habilitado en Setup", style={'color': '#27ae60', 'fontWeight': 'bold'})
+        ])
+        
+        return resultado, f"{peso_rc_actual:.2f} g"
+        
+    except Exception as e:
+        return f"Error al realizar interpolación: {str(e)}", "N/A"
+
+def predecir_peso_desde_integral(integral_valor):
+    """Función que usa la interpolación para predecir peso desde integral."""
+    global funcion_interpolacion, datos_calibracion
+    
+    if funcion_interpolacion is None:
+        return 0
+    
+    try:
+        # Usar directamente la función de interpolación
+        integrales_conocidas = np.array([d[1] for d in datos_calibracion])
+        
+        # Verificar si está dentro del rango
+        if integral_valor < integrales_conocidas.min() or integral_valor > integrales_conocidas.max():
+            # Extrapolación (puede ser menos precisa)
+            peso = float(funcion_interpolacion(integral_valor))
         else:
-            return "✓ Ambos sensores disponibles", opciones
-    return "", opciones
+            # Interpolación (más precisa)
+            peso = float(funcion_interpolacion(integral_valor))
+        
+        return peso
+    except Exception as e:
+        print(f"Error en predicción: {e}")
+        return 0
+
+###################################################################################################################
 
 # Callback para iniciar/detener control automático
 @app.callback(
@@ -880,127 +1004,27 @@ def proceso_control_automatico(n_intervals, n_limpiar, store_control, historial)
             accion, estilo_accion,
             figura, historial)
 
-# Callback para realizar ajuste
+# Callback para actualizar info de sensor disponible
 @app.callback(
-    [Output('resultado-ajuste', 'children'),
-     Output('peso-rc', 'children', allow_duplicate=True)],
-    Input('button-ajuste', 'n_clicks'),
-    prevent_initial_call=True
+    [Output('info-sensor', 'children'),
+     Output('dropdown-sensor', 'options')],
+    Input('tabs-example-1', 'value')
 )
-def realizar_ajuste(n_clicks):
-    global datos_calibracion, ajuste_realizado, funcion_interpolacion, tipo_interpolacion_actual
+def actualizar_info_sensor(tab):
+    global ajuste_realizado
     
-    if not datos_calibracion or len(datos_calibracion) < 2:
-        return "Error: Se necesitan al menos 2 medidas para realizar la interpolación", "N/A"
+    opciones = [
+        {'label': 'Báscula', 'value': 'bascula'},
+        {'label': 'Circuito RC', 'value': 'rc', 'disabled': not ajuste_realizado}
+    ]
     
-    # Extraer datos
-    pesos = np.array([d[0] for d in datos_calibracion])
-    integrales = np.array([d[1] for d in datos_calibracion])
-    
-    # Verificar que no haya valores duplicados en integrales (requerido para interpolación)
-    if len(np.unique(integrales)) < len(integrales):
-        return "Error: Hay valores de integral duplicados. Se necesitan valores únicos para interpolar.", "N/A"
-    
-    try:
-        # Ordenar los datos por integral (requerido para interpolación)
-        indices = np.argsort(integrales)
-        integrales_sorted = integrales[indices]
-        pesos_sorted = pesos[indices]
-        
-        # Crear interpolación lineal
-        funcion_interpolacion = interp1d(integrales_sorted, pesos_sorted, kind='linear', 
-                                        fill_value='extrapolate')
-        nombre_metodo = "Interpolación Lineal"
-        descripcion = "Conecta los puntos con líneas rectas (scipy.interpolate.interp1d)"
-        
-        # Calcular error de interpolación en los puntos conocidos
-        pesos_interpolados = funcion_interpolacion(integrales_sorted)
-        
-        # Calcular R² y error
-        ss_res = np.sum((pesos_sorted - pesos_interpolados) ** 2)
-        ss_tot = np.sum((pesos_sorted - np.mean(pesos_sorted)) ** 2)
-        r_squared = 1 - (ss_res / ss_tot)
-        
-        rmse = np.sqrt(np.mean((pesos_sorted - pesos_interpolados) ** 2))
-        max_error = np.max(np.abs(pesos_sorted - pesos_interpolados))
-        
-        ajuste_realizado = True
-        tipo_interpolacion_actual = 'linear'
-        
-        # Calcular peso RC actual usando interpolación
-        peso_rc_actual = predecir_peso_desde_integral(valor_integral)
-        
-        resultado = html.Div([
-            html.H4('Interpolación Completada', style={'color': '#27ae60'}),
-            html.P(f"Método: {nombre_metodo}", style={'fontSize': '13px', 'fontWeight': 'bold'}),
-            html.P(descripcion, style={'fontSize': '11px', 'fontStyle': 'italic', 'color': '#7f8c8d'}),
-            html.Div([
-                html.P(f"R² = {r_squared:.6f}", style={'fontWeight': 'bold', 'display': 'inline-block', 'marginRight': '15px'}),
-                html.P(f"RMSE = {rmse:.4f} g", style={'display': 'inline-block', 'marginRight': '15px'}),
-                html.P(f"Error máx = {max_error:.4f} g", style={'display': 'inline-block'})
-            ]),
-            html.P(f"Puntos interpolados: {len(datos_calibracion)}", style={'fontSize': '11px'}),
-            html.P("✓ Peso RC habilitado en Setup", style={'color': '#27ae60', 'fontWeight': 'bold'})
-        ])
-        
-        return resultado, f"{peso_rc_actual:.2f} g"
-        
-    except Exception as e:
-        return f"Error al realizar interpolación: {str(e)}", "N/A"
-
-def predecir_peso_desde_integral(integral_valor):
-    """Función que usa la interpolación para predecir peso desde integral."""
-    global funcion_interpolacion, datos_calibracion
-    
-    if funcion_interpolacion is None:
-        return 0
-    
-    try:
-        # Usar directamente la función de interpolación
-        integrales_conocidas = np.array([d[1] for d in datos_calibracion])
-        
-        # Verificar si está dentro del rango
-        if integral_valor < integrales_conocidas.min() or integral_valor > integrales_conocidas.max():
-            # Extrapolación (puede ser menos precisa)
-            peso = float(funcion_interpolacion(integral_valor))
+    if tab == 'tab-3':
+        if not ajuste_realizado:
+            return "⚠️ Circuito RC no disponible. Complete la calibración en la pestaña anterior.", opciones
         else:
-            # Interpolación (más precisa)
-            peso = float(funcion_interpolacion(integral_valor))
-        
-        return peso
-    except Exception as e:
-        print(f"Error en predicción: {e}")
-        return 0
+            return "✓ Ambos sensores disponibles", opciones
+    return "", opciones
 
-# Modificar callback de actualizar_peso para incluir peso RC si hay ajuste
-@app.callback(
-    Output('peso-bascula', 'children'),
-    Output('valor-condensador','children'),
-    Output('tank-fill','style'),
-    Output('peso-rc', 'children'),
-    Input('interval-peso', 'n_intervals'),
-    prevent_initial_call=True
-)
-def actualizar_peso_completo(n_intervals):
-    global ajuste_realizado, funcion_interpolacion, valor_integral
-    
-    peso = com.leer_peso(ser)
-    valor_rc = valor_integral
-    
-    # Calcular peso RC si hay ajuste
-    if ajuste_realizado and funcion_interpolacion is not None:
-        peso_rc = predecir_peso_desde_integral(valor_rc)
-        peso_rc_str = f"{peso_rc:.2f} g"
-    else:
-        peso_rc_str = "N/A"
-    
-    # Calcular porcentaje de llenado de forma continua
-    peso_maximo = 600  # Peso máximo del tanque en gramos
-    peso_num = float(peso) if peso != "N/A" else 0
-    porcentaje = min(100, max(0, (peso_num / peso_maximo) * 100))
-    estilo = estilo_tanque(porcentaje)
-    
-    return f"{peso} g", f"{valor_rc:.2f}", estilo, peso_rc_str
 
 if __name__ == '__main__':
     try:
