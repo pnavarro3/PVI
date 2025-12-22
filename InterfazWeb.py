@@ -176,22 +176,13 @@ def render_tab1():
             html.Div([
                 html.H3('Tarado y Calibrado de la Bascula'),
                 html.Div([
-                    html.Button('Tarar', id='button-tarar', n_clicks=0, 
-                            style={'display': 'block', 'margin': '30px auto', 'padding': '10px 20px'}),
-                    html.Button('Escalar', id='button-calibrar', n_clicks=0,
-                            style={'display': 'block', 'margin': '20px auto', 'padding': '10px 20px'}),
+                        html.Button('Tarar', id='button-tarar', n_clicks=0, 
+                            style={'display': 'block', 'margin': '50px auto', 'padding': '10px 60px'}),
                 ])
             ], className='control-box', style={'display': 'inline-block', 'width': '300px','height': '175px', 'textAlign': 'center', 'verticalAlign': 'top'}),
             
-            html.Div([
-                html.H3('Frecuencia RC'),
-                html.H4('Introduce el valor de la frecuencia de trabajo'),
-                html.Div([
-                    dcc.Input(id='InputFrecuencia', type="number", placeholder="Frecuencia...",
-                              style={'display': 'block', 'margin': '20px auto', 'padding': '5px 30px'}),
-                ])
-            ], className='control-box', style={'display': 'inline-block', 'width': '300px','height': '175px', 'textAlign': 'center', 'verticalAlign': 'top', 'marginLeft': '50px'})
-        ], style={'display': 'block', 'marginLeft': '50px', 'marginTop': '40px'})
+            
+        ], style={'display': 'block', 'marginLeft': '250px', 'marginTop': '40px'})
             ], style={'display': 'inline-block', 'verticalAlign': 'top'}),
             
             # Columna derecha - Visualización
@@ -253,7 +244,7 @@ def render_tab2():
             html.Div([
                 html.H3('Configuración de Medidas'),
                 html.Div([
-                    html.Label('Número de medidas:', style={'fontWeight': 'bold', 'display': 'block', 'marginBottom': '5px'}),
+                    html.Label('Número de medidas: (Mínimo 10)', style={'fontWeight': 'bold', 'display': 'block', 'marginBottom': '5px'}),
                     dcc.Input(id='input-num-medidas', type='number', value=10, min=5, max=50,
                              style={'width': '100%', 'padding': '8px', 'marginBottom': '20px'}),
                 ]),
@@ -580,7 +571,13 @@ def controlar_calibracion(n_run, n_stop, num_medidas, store_data):
         com.comando_vaciar(ser)  # Empezar desde vacío
         primerVaciado = True
         
-        return False, {'activo': True, 'num_medidas': num_medidas, 'medida_actual': 0}
+        return False, {
+                'activo': True,
+                'num_medidas': num_medidas,
+                'medidas_por_ciclo': 5,      
+                'medidas_totales': 0,        # contador global
+                'medida_en_ciclo': 0         # contador dentro del ciclo
+            }
     
     elif button_id == 'button-stop-calibracion' and n_stop > 0:
         # Detener calibración
@@ -621,14 +618,23 @@ def proceso_calibracion(n_intervals, store_data):
     if not store_data['activo']:
         return "Esperando...", [], {'data': [], 'layout': {'title': 'Peso Báscula vs Integral RC'}}, store_data, True
     
-    medida_actual = store_data['medida_actual']
     num_medidas = store_data['num_medidas']
+    medidas_por_ciclo = store_data['medidas_por_ciclo']
+    medidas_totales = store_data['medidas_totales']
+    medida_en_ciclo = store_data['medida_en_ciclo']
     peso_minimo = 0  # Tanque vacío
     peso_maximo = 600  # Tanque lleno
     
-    # Calcular el peso objetivo para esta medida (distribución uniforme)
-    if num_medidas > 1:
-        peso_objetivo = peso_minimo + (peso_maximo - peso_minimo) * medida_actual / (num_medidas - 1)
+    # Número REAL de medidas en este ciclo (por si el último es parcial)
+    medidas_en_este_ciclo = min(
+        medidas_por_ciclo,
+        num_medidas - (medidas_totales - medida_en_ciclo)
+    )
+
+    if medidas_en_este_ciclo > 1:
+        peso_objetivo = peso_minimo + (peso_maximo - peso_minimo) * (
+            medida_en_ciclo / (medidas_en_este_ciclo - 1)
+        )
     else:
         peso_objetivo = peso_minimo
     
@@ -637,7 +643,7 @@ def proceso_calibracion(n_intervals, store_data):
         llenando = True
         comienzaCiclos = False
     # Si terminamos todas las medidas
-    if medida_actual >= num_medidas:
+    if medidas_totales >= num_medidas:
         com.comando_parar(ser)
         estado = f"Calibración completada: {len(datos_calibracion)} medidas recolectadas"
         
@@ -668,7 +674,7 @@ def proceso_calibracion(n_intervals, store_data):
         else:
             figura = {'data': [], 'layout': {'title': 'Peso Báscula vs Integral RC'}}
         
-        return estado, tabla_datos, figura, {'activo': False, 'num_medidas': num_medidas, 'medida_actual': medida_actual}, True
+        return estado, tabla_datos, figura, {'activo': False, 'num_medidas': num_medidas, 'medida_actual': store_data['medidas_totales']}, True
     
     # Leer peso actual
     peso_str = com.leer_peso(ser)
@@ -686,29 +692,163 @@ def proceso_calibracion(n_intervals, store_data):
         datos_calibracion.append([peso_actual, integral])
         
         # Actualizar estado
-        store_data['medida_actual'] = medida_actual + 1
-        estado = f"Medida {medida_actual + 1} de {num_medidas} completada (Peso objetivo: {peso_objetivo:.0f}g)"
-        
+        store_data['medidas_totales'] += 1
+        store_data['medida_en_ciclo'] += 1
+        estado = (
+        f"Medida {store_data['medidas_totales']} de {num_medidas} "
+        f"(ciclo, paso {store_data['medida_en_ciclo']})"
+        )
+
+        if store_data['medida_en_ciclo'] >= store_data['medidas_por_ciclo']:
+            store_data['medida_en_ciclo'] = 0
+
         # 
-        # Si no es la última medida, calcular siguiente objetivo y ajustar
-        if medida_actual + 1 < num_medidas:
-            siguiente_objetivo = peso_minimo + (peso_maximo - peso_minimo) * (medida_actual + 1) / (num_medidas - 1)
-            if siguiente_objetivo > peso_actual:
-                com.comando_llenar(ser)
-                llenando = True
-                vaciando = False
+        if store_data['medidas_totales'] < store_data['num_medidas']:
+
+            # ¿Quedan medidas dentro del ciclo actual?
+            if store_data['medida_en_ciclo'] < store_data['medidas_por_ciclo']:
+
+                m = store_data['medida_en_ciclo']
+                M = store_data['medidas_por_ciclo']
+
+                # Ajuste por último ciclo parcial
+                medidas_en_este_ciclo = min(
+                    M,
+                    store_data['num_medidas'] - (store_data['medidas_totales'] - m)
+                )
+
+                if medidas_en_este_ciclo > 1:
+                    siguiente_objetivo = peso_minimo + (peso_maximo - peso_minimo) * (
+                        m / (medidas_en_este_ciclo - 1)
+                    )
+                else:
+                    siguiente_objetivo = peso_minimo
+
+                if siguiente_objetivo > peso_actual:
+                    com.comando_llenar(ser)
+                    llenando = True
+                    vaciando = False
+                else:
+                    com.comando_vaciar(ser)
+                    vaciando = True
+                    llenando = False
+
             else:
-                com.comando_vaciar(ser)
-                vaciando = True
-                llenando = True
+                # Fin de ciclo → volver a vacío
+                store_data['medida_en_ciclo'] = 0
+
         else:
+            # Fin TOTAL
+            com.comando_parar(ser)
+    elif peso_actual > peso_objetivo and llenando and peso_actual < peso_maximo:
+        # Tomar medida
+        integral = valor_integral
+        datos_calibracion.append([peso_actual, integral])
+        
+        # Actualizar estado
+        store_data['medidas_totales'] += 1
+        store_data['medida_en_ciclo'] += 1
+        estado = (
+        f"Medida {store_data['medidas_totales']} de {num_medidas} "
+        f"(ciclo, paso {store_data['medida_en_ciclo']})"
+        )
+        # 
+        # 
+        if store_data['medidas_totales'] < store_data['num_medidas']:
+
+            # ¿Quedan medidas dentro del ciclo actual?
+            if store_data['medida_en_ciclo'] < store_data['medidas_por_ciclo']:
+
+                m = store_data['medida_en_ciclo']
+                M = store_data['medidas_por_ciclo']
+
+                # Ajuste por último ciclo parcial
+                medidas_en_este_ciclo = min(
+                    M,
+                    store_data['num_medidas'] - (store_data['medidas_totales'] - m)
+                )
+
+                if medidas_en_este_ciclo > 1:
+                    siguiente_objetivo = peso_minimo + (peso_maximo - peso_minimo) * (
+                        m / (medidas_en_este_ciclo - 1)
+                    )
+                else:
+                    siguiente_objetivo = peso_minimo
+
+                if siguiente_objetivo > peso_actual:
+                    com.comando_llenar(ser)
+                    llenando = True
+                    vaciando = False
+                else:
+                    com.comando_vaciar(ser)
+                    vaciando = True
+                    llenando = False
+
+            else:
+                # Fin de ciclo → volver a vacío
+                store_data['medida_en_ciclo'] = 0
+
+
+        else:
+            # Fin TOTAL
+            com.comando_parar(ser)
+    elif peso_actual < peso_objetivo and vaciando and peso_actual > peso_minimo: 
+        # Tomar medida
+        integral = valor_integral
+        datos_calibracion.append([peso_actual, integral])
+        
+        # Actualizar estado
+        store_data['medidas_totales'] += 1
+        store_data['medida_en_ciclo'] += 1
+        estado = (
+        f"Medida {store_data['medidas_totales']} de {num_medidas} "
+        f"(ciclo, paso {store_data['medida_en_ciclo']})"
+        )
+        # 
+        # 
+        if store_data['medidas_totales'] < store_data['num_medidas']:
+
+            # ¿Quedan medidas dentro del ciclo actual?
+            if store_data['medida_en_ciclo'] < store_data['medidas_por_ciclo']:
+
+                m = store_data['medida_en_ciclo']
+                M = store_data['medidas_por_ciclo']
+
+                # Ajuste por último ciclo parcial
+                medidas_en_este_ciclo = min(
+                    M,
+                    store_data['num_medidas'] - (store_data['medidas_totales'] - m)
+                )
+
+                if medidas_en_este_ciclo > 1:
+                    siguiente_objetivo = peso_minimo + (peso_maximo - peso_minimo) * (
+                        m / (medidas_en_este_ciclo - 1)
+                    )
+                else:
+                    siguiente_objetivo = peso_minimo
+
+                if siguiente_objetivo > peso_actual:
+                    com.comando_llenar(ser)
+                    llenando = True
+                    vaciando = False
+                else:
+                    com.comando_vaciar(ser)
+                    vaciando = True
+                    llenando = False
+
+            else:
+                # Fin de ciclo → volver a vacío
+                store_data['medida_en_ciclo'] = 0
+                
+        else:
+            # Fin TOTAL
             com.comando_parar(ser)
     else:
         # Ajustar nivel para alcanzar objetivo
         if llenando:
-            estado = f"Llenando hacia medida {medida_actual + 1} (Actual: {peso_actual:.0f}g → Objetivo: {peso_objetivo:.0f}g)"
+            estado = f"Llenando hacia medida {store_data['medidas_totales'] + 1} (Actual: {peso_actual:.0f}g → Objetivo: {peso_objetivo:.0f}g)"
         elif vaciando:
-            estado = f"Vaciando hacia medida {medida_actual + 1} (Actual: {peso_actual:.0f}g → Objetivo: {peso_objetivo:.0f}g)"
+            estado = f"Vaciando hacia medida {store_data['medidas_totales'] + 1} (Actual: {peso_actual:.0f}g → Objetivo: {peso_objetivo:.0f}g)"
         
     
     # Preparar datos para visualización parcial
