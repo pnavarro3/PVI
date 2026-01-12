@@ -132,6 +132,8 @@ app.layout = html.Div([
     dcc.Store(id='store-control', data={'activo': False, 'sensor': 'bascula', 'consigna': 400}),
     dcc.Store(id='store-historial-control', data={'tiempo': [], 'nivel': [], 'consigna': [], 'error': []}),
     dcc.Store(id='store-margen', data=10),  # Margen fijo del Arduino
+    dcc.Store(id='store-calibracion-tabla', data=[]),
+    dcc.Store(id='store-calibracion-figura', data={'data': [], 'layout': {'title': 'Peso Báscula vs Integral RC'}}),
     
     html.Div([
         dcc.Tabs(id='tabs-example-1', value='tab-1', children=[
@@ -557,33 +559,37 @@ def actualizar_peso_completo(n_intervals):
     prevent_initial_call=True
 )
 def controlar_calibracion(n_run, n_stop, num_medidas, store_data):
-    global datos_calibracion, primerVaciado
-    
+    global datos_calibracion
+
     ctx = dash.callback_context
     if not ctx.triggered:
         return True, store_data
-    
+
     button_id = ctx.triggered[0]['prop_id'].split('.')[0]
-    
-    if button_id == 'button-run-calibracion' and n_run > 0:
-        # Iniciar calibración: calcular objetivos y empezar a vaciar
+
+    if button_id == 'button-run-calibracion' and n_run and n_run > 0:
+        # Iniciar: vaciar hasta 0 sin medir
         datos_calibracion = []
-        com.comando_vaciar(ser)  # Empezar desde vacío
-        primerVaciado = True
-        
+        com.comando_vaciar(ser)
         return False, {
-                'activo': True,
-                'num_medidas': num_medidas,
-                'medidas_por_ciclo': 5,      
-                'medidas_totales': 0,        # contador global
-                'medida_en_ciclo': 0         # contador dentro del ciclo
-            }
-    
-    elif button_id == 'button-stop-calibracion' and n_stop > 0:
-        # Detener calibración
+            'activo': True,
+            'num_medidas': int(num_medidas or 10),
+            'medidas_por_ciclo': 8,          # medidas por fase (llenado o vaciado)
+            'medidas_totales': 0,
+            'medida_en_fase': 0,
+            'modo': 'vaciando',              # primer vaciado sin medir
+            'primer_vaciado': True,
+            # Estado de filtro/antirruido
+            'hist_pesos': [],
+            'ultimo_peso_filtrado': 0.0,
+            'consec_en_margen': 0,
+            'ultima_medicion_ts': 0.0
+        }
+
+    if button_id == 'button-stop-calibracion' and n_stop and n_stop > 0:
         com.comando_parar(ser)
         return True, {'activo': False, 'num_medidas': 0, 'medida_actual': 0}
-    
+
     return True, store_data
 
 # Callback para proceso de calibración
@@ -592,292 +598,220 @@ def controlar_calibracion(n_run, n_stop, num_medidas, store_data):
      Output('tabla-calibracion', 'data'),
      Output('grafica-calibracion', 'figure'),
      Output('store-calibrando', 'data', allow_duplicate=True),
-     Output('interval-calibracion', 'disabled', allow_duplicate=True)],
+     Output('interval-calibracion', 'disabled', allow_duplicate=True),
+     Output('store-calibracion-tabla', 'data', allow_duplicate=True),
+     Output('store-calibracion-figura', 'data', allow_duplicate=True)],
     Input('interval-calibracion', 'n_intervals'),
     [State('store-calibrando', 'data')],
     prevent_initial_call=True
 )
 def proceso_calibracion(n_intervals, store_data):
-    global datos_calibracion, valor_integral, primerVaciado, comienzaCiclos,llenando,vaciando
-    
-    if primerVaciado:
-        peso_str = com.leer_peso(ser)
-        try:
-            peso_actual = float(peso_str)
-        except (ValueError, TypeError):
-            peso_actual = 0
-        
-        if peso_actual > 0:
-            com.comando_vaciar(ser)
-            return "Vaciando depósito...", [], {'data': [], 'layout': {'title': 'Peso Báscula vs Integral RC'}}, store_data, False
-        else:
-            com.comando_parar(ser)
-            primerVaciado = False
-            comienzaCiclos = True
+    global datos_calibracion, valor_integral, funcion_interpolacion, ajuste_realizado, tipo_interpolacion_actual
 
-    if not store_data['activo']:
-        return "Esperando...", [], {'data': [], 'layout': {'title': 'Peso Báscula vs Integral RC'}}, store_data, True
-    
-    num_medidas = store_data['num_medidas']
-    medidas_por_ciclo = store_data['medidas_por_ciclo']
-    medidas_totales = store_data['medidas_totales']
-    medida_en_ciclo = store_data['medida_en_ciclo']
-    peso_minimo = 0  # Tanque vacío
-    peso_maximo = 600  # Tanque lleno
-    
-    # Número REAL de medidas en este ciclo (por si el último es parcial)
-    medidas_en_este_ciclo = min(
-        medidas_por_ciclo,
-        num_medidas - (medidas_totales - medida_en_ciclo)
-    )
+    if not store_data.get('activo', False):
+        tabla, fig = [], {'data': [], 'layout': {'title': 'Peso Báscula vs Integral RC'}}
+        return "Esperando...", tabla, fig, store_data, True, tabla, fig
 
-    if medidas_en_este_ciclo > 1:
-        peso_objetivo = peso_minimo + (peso_maximo - peso_minimo) * (
-            medida_en_ciclo / (medidas_en_este_ciclo - 1)
-        )
-    else:
-        peso_objetivo = peso_minimo
-    
-    if comienzaCiclos: 
-        com.comando_llenar(ser)
-        llenando = True
-        comienzaCiclos = False
-    # Si terminamos todas las medidas
-    if medidas_totales >= num_medidas:
-        com.comando_parar(ser)
-        estado = f"Calibración completada: {len(datos_calibracion)} medidas recolectadas"
-        
-        # Preparar datos para tabla
-        tabla_datos = [
-            {'medida': i+1, 'peso': f"{d[0]:.2f}", 'integral': f"{d[1]:.2f}"}
-            for i, d in enumerate(datos_calibracion)
-        ]
-        
-        # Preparar gráfica
-        if datos_calibracion:
-            pesos = [d[0] for d in datos_calibracion]
-            integrales = [d[1] for d in datos_calibracion]
-            
-            figura = {
-                'data': [
-                    go.Scatter(x=integrales, y=pesos, mode='markers', 
-                              marker=dict(size=10, color='blue'),
-                              name='Datos medidos')
-                ],
-                'layout': {
-                    'title': 'Peso Báscula vs Integral RC',
-                    'xaxis': {'title': 'Integral RC'},
-                    'yaxis': {'title': 'Peso (g)'},
-                    'hovermode': 'closest'
-                }
-            }
-        else:
-            figura = {'data': [], 'layout': {'title': 'Peso Báscula vs Integral RC'}}
-        
-        return estado, tabla_datos, figura, {'activo': False, 'num_medidas': num_medidas, 'medida_actual': store_data['medidas_totales']}, True
-    
-    # Leer peso actual
+    # Lectura de peso
     peso_str = com.leer_peso(ser)
     try:
         peso_actual = float(peso_str)
-    except ValueError:
-        peso_actual = 0
-    
-    margen = 20  # Margen de tolerancia en gramos
-    
-    # Verificar si hemos alcanzado el peso objetivo (con margen)
-    if abs(peso_actual - peso_objetivo) <= margen:
-        # Tomar medida
-        integral = valor_integral
-        datos_calibracion.append([peso_actual, integral])
-        
-        # Actualizar estado
-        store_data['medidas_totales'] += 1
-        store_data['medida_en_ciclo'] += 1
-        estado = (
-        f"Medida {store_data['medidas_totales']} de {num_medidas} "
-        f"(ciclo, paso {store_data['medida_en_ciclo']})"
-        )
+    except (ValueError, TypeError):
+        peso_actual = 0.0
 
-        if store_data['medida_en_ciclo'] >= store_data['medidas_por_ciclo']:
-            store_data['medida_en_ciclo'] = 0
+    # Parámetros
+    peso_min = 0
+    peso_max = 600
+    margen = 20
 
-        # 
-        if store_data['medidas_totales'] < store_data['num_medidas']:
+    # Estado
+    num_medidas = int(store_data['num_medidas'])
+    medidas_por_fase = int(store_data['medidas_por_ciclo'])  # ahora significa por fase
+    medidas_totales = int(store_data['medidas_totales'])
+    medida_en_fase = int(store_data.get('medida_en_fase', 0))
+    modo = store_data.get('modo', 'vaciando')
+    primer_vaciado = store_data.get('primer_vaciado', False)
+    # Estado de filtrado (con valores por defecto si faltan)
+    hist_pesos = list(store_data.get('hist_pesos', []))
+    ultimo_peso_filtrado = float(store_data.get('ultimo_peso_filtrado', 0.0))
+    consec_en_margen = int(store_data.get('consec_en_margen', 0))
+    ultima_medicion_ts = float(store_data.get('ultima_medicion_ts', 0.0))
 
-            # ¿Quedan medidas dentro del ciclo actual?
-            if store_data['medida_en_ciclo'] < store_data['medidas_por_ciclo']:
-
-                m = store_data['medida_en_ciclo']
-                M = store_data['medidas_por_ciclo']
-
-                # Ajuste por último ciclo parcial
-                medidas_en_este_ciclo = min(
-                    M,
-                    store_data['num_medidas'] - (store_data['medidas_totales'] - m)
-                )
-
-                if medidas_en_este_ciclo > 1:
-                    siguiente_objetivo = peso_minimo + (peso_maximo - peso_minimo) * (
-                        m / (medidas_en_este_ciclo - 1)
-                    )
-                else:
-                    siguiente_objetivo = peso_minimo
-
-                if siguiente_objetivo > peso_actual:
-                    com.comando_llenar(ser)
-                    llenando = True
-                    vaciando = False
-                else:
-                    com.comando_vaciar(ser)
-                    vaciando = True
-                    llenando = False
-
-            else:
-                # Fin de ciclo → volver a vacío
-                store_data['medida_en_ciclo'] = 0
-
-        else:
-            # Fin TOTAL
-            com.comando_parar(ser)
-    elif peso_actual > peso_objetivo and llenando and peso_actual < peso_maximo:
-        # Tomar medida
-        integral = valor_integral
-        datos_calibracion.append([peso_actual, integral])
-        
-        # Actualizar estado
-        store_data['medidas_totales'] += 1
-        store_data['medida_en_ciclo'] += 1
-        estado = (
-        f"Medida {store_data['medidas_totales']} de {num_medidas} "
-        f"(ciclo, paso {store_data['medida_en_ciclo']})"
-        )
-        # 
-        # 
-        if store_data['medidas_totales'] < store_data['num_medidas']:
-
-            # ¿Quedan medidas dentro del ciclo actual?
-            if store_data['medida_en_ciclo'] < store_data['medidas_por_ciclo']:
-
-                m = store_data['medida_en_ciclo']
-                M = store_data['medidas_por_ciclo']
-
-                # Ajuste por último ciclo parcial
-                medidas_en_este_ciclo = min(
-                    M,
-                    store_data['num_medidas'] - (store_data['medidas_totales'] - m)
-                )
-
-                if medidas_en_este_ciclo > 1:
-                    siguiente_objetivo = peso_minimo + (peso_maximo - peso_minimo) * (
-                        m / (medidas_en_este_ciclo - 1)
-                    )
-                else:
-                    siguiente_objetivo = peso_minimo
-
-                if siguiente_objetivo > peso_actual:
-                    com.comando_llenar(ser)
-                    llenando = True
-                    vaciando = False
-                else:
-                    com.comando_vaciar(ser)
-                    vaciando = True
-                    llenando = False
-
-            else:
-                # Fin de ciclo → volver a vacío
-                store_data['medida_en_ciclo'] = 0
-
-
-        else:
-            # Fin TOTAL
-            com.comando_parar(ser)
-    elif peso_actual < peso_objetivo and vaciando and peso_actual > peso_minimo: 
-        # Tomar medida
-        integral = valor_integral
-        datos_calibracion.append([peso_actual, integral])
-        
-        # Actualizar estado
-        store_data['medidas_totales'] += 1
-        store_data['medida_en_ciclo'] += 1
-        estado = (
-        f"Medida {store_data['medidas_totales']} de {num_medidas} "
-        f"(ciclo, paso {store_data['medida_en_ciclo']})"
-        )
-        # 
-        # 
-        if store_data['medidas_totales'] < store_data['num_medidas']:
-
-            # ¿Quedan medidas dentro del ciclo actual?
-            if store_data['medida_en_ciclo'] < store_data['medidas_por_ciclo']:
-
-                m = store_data['medida_en_ciclo']
-                M = store_data['medidas_por_ciclo']
-
-                # Ajuste por último ciclo parcial
-                medidas_en_este_ciclo = min(
-                    M,
-                    store_data['num_medidas'] - (store_data['medidas_totales'] - m)
-                )
-
-                if medidas_en_este_ciclo > 1:
-                    siguiente_objetivo = peso_minimo + (peso_maximo - peso_minimo) * (
-                        m / (medidas_en_este_ciclo - 1)
-                    )
-                else:
-                    siguiente_objetivo = peso_minimo
-
-                if siguiente_objetivo > peso_actual:
-                    com.comando_llenar(ser)
-                    llenando = True
-                    vaciando = False
-                else:
-                    com.comando_vaciar(ser)
-                    vaciando = True
-                    llenando = False
-
-            else:
-                # Fin de ciclo → volver a vacío
-                store_data['medida_en_ciclo'] = 0
-                
-        else:
-            # Fin TOTAL
-            com.comando_parar(ser)
-    else:
-        # Ajustar nivel para alcanzar objetivo
-        if llenando:
-            estado = f"Llenando hacia medida {store_data['medidas_totales'] + 1} (Actual: {peso_actual:.0f}g → Objetivo: {peso_objetivo:.0f}g)"
-        elif vaciando:
-            estado = f"Vaciando hacia medida {store_data['medidas_totales'] + 1} (Actual: {peso_actual:.0f}g → Objetivo: {peso_objetivo:.0f}g)"
-        
-    
-    # Preparar datos para visualización parcial
-    tabla_datos = [
-        {'medida': i+1, 'peso': f"{d[0]:.2f}", 'integral': f"{d[1]:.2f}"}
-        for i, d in enumerate(datos_calibracion)
-    ]
-    
-    if datos_calibracion:
-        pesos = [d[0] for d in datos_calibracion]
-        integrales = [d[1] for d in datos_calibracion]
-        
-        figura = {
-            'data': [
-                go.Scatter(x=integrales, y=pesos, mode='markers',
-                          marker=dict(size=10, color='blue'),
-                          name='Datos medidos')
-            ],
-            'layout': {
-                'title': 'Peso Báscula vs Integral RC',
-                'xaxis': {'title': 'Integral RC'},
-                'yaxis': {'title': 'Peso (g)'},
-                'hovermode': 'closest'
+    # Helpers visualización
+    def tabla_y_fig():
+        tabla = [
+            {'medida': i+1, 'peso': f"{d[0]:.2f}", 'integral': f"{d[1]:.2f}"}
+            for i, d in enumerate(datos_calibracion)
+        ]
+        if datos_calibracion:
+            pesos = [d[0] for d in datos_calibracion]
+            integrales = [d[1] for d in datos_calibracion]
+            fig = {
+                'data': [go.Scatter(x=integrales, y=pesos, mode='markers',
+                                    marker=dict(size=10, color='blue'),
+                                    name='Datos medidos')],
+                'layout': {'title': 'Peso Báscula vs Integral RC',
+                           'xaxis': {'title': 'Integral RC'},
+                           'yaxis': {'title': 'Peso (g)'},
+                           'hovermode': 'closest'}
             }
-        }
+        else:
+            fig = {'data': [], 'layout': {'title': 'Peso Báscula vs Integral RC'}}
+        return tabla, fig
+
+    # Fin global
+    if medidas_totales >= num_medidas:
+        com.comando_parar(ser)
+        estado = f"Calibración completada: {len(datos_calibracion)} medidas recolectadas"
+        tabla, fig = tabla_y_fig()
+        return estado, tabla, fig, store_data, True, tabla, fig
+
+    # Primer vaciado sin medir
+    if primer_vaciado:
+        if peso_actual > (peso_min + margen):
+            com.comando_vaciar(ser)
+            estado = f"Vaciando depósito... (Actual: {peso_actual:.0f}g → Objetivo: {peso_min}g)"
+            tabla, fig = tabla_y_fig()
+            return estado, tabla, fig, store_data, False, tabla, fig
+        else:
+            com.comando_parar(ser)
+            store_data['primer_vaciado'] = False
+            store_data['modo'] = 'llenando'
+            store_data['medida_en_fase'] = 0
+            com.comando_llenar(ser)
+            estado = "Iniciando fase de llenado (mediciones)"
+            tabla, fig = tabla_y_fig()
+            return estado, tabla, fig, store_data, False, tabla, fig
+
+    # Pendientes y tamaño de esta fase
+    pendientes = num_medidas - medidas_totales
+    M_este = max(1, min(medidas_por_fase, pendientes))
+
+    # Objetivo de esta fase (clamp para evitar negativos o > max)
+    if modo == 'llenando':
+        if M_este == 1:
+            objetivo = peso_max
+        else:
+            indice = min(max(0, medida_en_fase), M_este - 1)
+            objetivo = peso_min + (peso_max - peso_min) * (indice / (M_este - 1))
+    else:  # vaciando
+        if M_este == 1:
+            objetivo = peso_min
+        else:
+            indice = min(max(0, medida_en_fase), M_este - 1)
+            objetivo = peso_max - (peso_max - peso_min) * (indice / (M_este - 1))
+    objetivo = max(peso_min, min(peso_max, objetivo))
+
+    # Actualizar filtro de lectura (mediana de no-cero para mitigar picos)
+    # Mantener ventana corta para respuesta rápida
+    ventana = 5
+    if not (modo == 'vaciando' and objetivo > (peso_min + margen) and peso_actual == 0):
+        # Evita añadir ceros espurios en vaciado lejos de objetivo
+        hist_pesos.append(peso_actual)
+        if len(hist_pesos) > ventana:
+            hist_pesos = hist_pesos[-ventana:]
+
+    # Calcular peso filtrado (mediana de valores no-cero si hay)
+    no_ceros = [p for p in hist_pesos if p > 0]
+    if no_ceros:
+        peso_filtrado = float(np.median(no_ceros))
     else:
-        figura = {'data': [], 'layout': {'title': 'Peso Báscula vs Integral RC'}}
-    
-    return estado, tabla_datos, figura, store_data, False
+        peso_filtrado = peso_actual if peso_actual > 0 else ultimo_peso_filtrado
+
+    # Decidir acción de bomba hacia el objetivo actual
+    if modo == 'llenando':
+        com.comando_llenar(ser)
+        alcanzado_base = (peso_filtrado >= objetivo - margen)
+        estado_mov = f"Llenando hacia medida {medidas_totales + 1} (Actual: {peso_filtrado:.0f}g → Objetivo: {objetivo:.0f}g)"
+    else:
+        com.comando_vaciar(ser)
+        # En vaciado, ignora ceros espurios lejos de objetivo
+        if peso_filtrado == 0 and objetivo > (peso_min + margen):
+            alcanzado_base = False
+        else:
+            alcanzado_base = (peso_filtrado <= objetivo + margen)
+        estado_mov = f"Vaciando hacia medida {medidas_totales + 1} (Actual: {peso_filtrado:.0f}g → Objetivo: {objetivo:.0f}g)"
+
+    # Anti-rebotes: requiere lecturas consecutivas dentro de margen reducido
+    margen_consec = max(5, margen // 2)
+    en_margen_consec = False
+    if modo == 'llenando':
+        en_margen_consec = (peso_filtrado >= objetivo - margen_consec)
+    else:
+        en_margen_consec = (peso_filtrado <= objetivo + margen_consec) and not (peso_filtrado == 0 and objetivo > (peso_min + margen))
+
+    consec_en_margen = (consec_en_margen + 1) if en_margen_consec else 0
+    min_consec = 2  # exigir al menos 2 lecturas consecutivas en margen
+    alcanzado = alcanzado_base and (consec_en_margen >= min_consec)
+
+    # ¿Registrar medida?
+    if alcanzado:
+        datos_calibracion.append([peso_filtrado, valor_integral])
+        medidas_totales += 1
+        medida_en_fase += 1
+        store_data['medidas_totales'] = medidas_totales
+        store_data['medida_en_fase'] = medida_en_fase
+        store_data['ultima_medicion_ts'] = time.time()
+        estado = f"Medida {medidas_totales} de {num_medidas} ({modo}, paso {medida_en_fase}/{M_este})"
+
+        # Actualizar interpolación de forma incremental si hay suficientes puntos y valores únicos
+        try:
+            if len(datos_calibracion) >= 3:
+                pesos_inc = np.array([d[0] for d in datos_calibracion])
+                integrales_inc = np.array([d[1] for d in datos_calibracion])
+                if len(np.unique(integrales_inc)) >= 2:
+                    idx = np.argsort(integrales_inc)
+                    integrales_sorted_inc = integrales_inc[idx]
+                    pesos_sorted_inc = pesos_inc[idx]
+                    funcion_interpolacion = interp1d(integrales_sorted_inc, pesos_sorted_inc, kind='linear', fill_value='extrapolate')
+                    ajuste_realizado = True
+                    tipo_interpolacion_actual = 'linear'
+        except Exception:
+            pass
+
+        # ¿Fin global?
+        if medidas_totales >= num_medidas:
+            # Activar interpolación automáticamente para el RC en Setup
+            try:
+                pesos = np.array([d[0] for d in datos_calibracion])
+                integrales = np.array([d[1] for d in datos_calibracion])
+                if len(pesos) >= 2 and len(np.unique(integrales)) >= 2:
+                    indices = np.argsort(integrales)
+                    integrales_sorted = integrales[indices]
+                    pesos_sorted = pesos[indices]
+                    funcion = interp1d(integrales_sorted, pesos_sorted, kind='linear', fill_value='extrapolate')
+                    # Persistir globals para Setup
+                    funcion_interpolacion = funcion
+                    ajuste_realizado = True
+                    tipo_interpolacion_actual = 'linear'
+            except Exception:
+                pass
+
+            com.comando_parar(ser)
+            tabla, fig = tabla_y_fig()
+            return f"Calibración completada: {len(datos_calibracion)} medidas recolectadas", tabla, fig, store_data, True, tabla, fig
+
+        # ¿Fin de fase? Cambiar fase y reiniciar contador
+        if medida_en_fase >= M_este:
+            store_data['medida_en_fase'] = 0
+            if modo == 'llenando':
+                store_data['modo'] = 'vaciando'
+                com.comando_vaciar(ser)
+                estado += " → Fin de fase de llenado. Comienza vaciado (con mediciones)."
+            else:
+                store_data['modo'] = 'llenando'
+                com.comando_llenar(ser)
+                estado += " → Fin de fase de vaciado. Comienza llenado (con mediciones)."
+    else:
+        estado = estado_mov
+
+    # Persistir estado de filtro
+    store_data['hist_pesos'] = hist_pesos
+    store_data['ultimo_peso_filtrado'] = peso_filtrado
+    store_data['consec_en_margen'] = consec_en_margen
+
+    tabla, fig = tabla_y_fig()
+    return estado, tabla, fig, store_data, False, tabla, fig
 
 
 
