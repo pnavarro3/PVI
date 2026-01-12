@@ -1025,8 +1025,12 @@ def controlar_sistema(n_iniciar, n_detener, sensor, consigna):
             # Con báscula: Arduino hace el control automático
             com.comando_consigna(consigna, ser)
             time.sleep(0.2)
-        # Con RC: la web hace el control (Arduino no puede leer RC directamente)
-        return False, {'activo': True, 'sensor': sensor, 'consigna': consigna, 'tiempo_inicio': time.time()}
+        else:
+            # Con RC: Python hace el control (Arduino no puede leer RC directamente)
+            # Asegurar que las bombas estén detenidas inicialmente
+            com.comando_parar(ser)
+            time.sleep(0.2)
+        return False, {'activo': True, 'sensor': sensor, 'consigna': consigna, 'tiempo_inicio': time.time(), 'ultima_accion': None}
     
     elif button_id == 'button-detener-control' and n_detener > 0:
         # Detener control (desactiva flag y para bombas)
@@ -1092,7 +1096,8 @@ def rehidratar_control(tab, n_intervals, estado_data, nivel, consigna, error, ac
      Output('store-control-consigna-display', 'data', allow_duplicate=True),
      Output('store-control-error', 'data', allow_duplicate=True),
      Output('store-control-accion', 'data', allow_duplicate=True),
-     Output('store-control-figura', 'data', allow_duplicate=True)],
+     Output('store-control-figura', 'data', allow_duplicate=True),
+     Output('store-control', 'data', allow_duplicate=True)],
     [Input('interval-control', 'n_intervals'),
      Input('button-limpiar-grafica', 'n_clicks')],
     [State('store-control', 'data'),
@@ -1120,10 +1125,11 @@ def proceso_control_automatico(n_intervals, n_limpiar, store_control, historial)
         }
         estado_data = {'estado': 'DETENIDO', 'estilo': {'padding': '15px', 'backgroundColor': '#ecf0f1', 'borderRadius': '5px', 'textAlign': 'center', 'fontSize': '18px', 'fontWeight': 'bold', 'color': '#e74c3c'}}
         accion_data = {'texto': 'NINGUNA', 'estilo': {'padding': '15px', 'backgroundColor': '#ecf0f1', 'borderRadius': '5px', 'textAlign': 'center', 'fontSize': '18px', 'fontWeight': 'bold'}}
+        store_control_reset = {'activo': False, 'sensor': store_control.get('sensor', 'bascula'), 'consigna': store_control.get('consigna', 400)}
         return ('DETENIDO', estado_data['estilo'],
                 '0 g', '0 g', '0 g', 'NINGUNA', accion_data['estilo'],
                 figura_vacia, historial_limpio,
-                estado_data, '0 g', '0 g', '0 g', accion_data, figura_vacia)
+                estado_data, '0 g', '0 g', '0 g', accion_data, figura_vacia, store_control_reset)
     
     # Si el control no está activo
     if not store_control.get('activo', False):
@@ -1134,7 +1140,7 @@ def proceso_control_automatico(n_intervals, n_limpiar, store_control, historial)
         return ('DETENIDO', estado_data['estilo'],
                 '0 g', consigna_str, '0 g', 'NINGUNA', accion_data['estilo'],
                 figura_actual, historial,
-                estado_data, '0 g', consigna_str, '0 g', accion_data, figura_actual)
+                estado_data, '0 g', consigna_str, '0 g', accion_data, figura_actual, store_control)
     
     # Leer nivel según sensor seleccionado
     sensor = store_control.get('sensor', 'bascula')
@@ -1156,11 +1162,40 @@ def proceso_control_automatico(n_intervals, n_limpiar, store_control, historial)
     # Calcular error
     error = consigna - nivel_actual
     
-    # El Arduino maneja el control automáticamente
-    # Solo monitoreamos y mostramos el estado
-    accion = "CONTROL ARDUINO ACTIVO"
-    estilo_accion = {'padding': '15px', 'backgroundColor': '#d5f4e6', 'borderRadius': '5px', 
-                     'textAlign': 'center', 'fontSize': '18px', 'fontWeight': 'bold', 'color': '#27ae60'}
+    # Control según sensor
+    if sensor == 'bascula':
+        # El Arduino maneja el control automáticamente
+        accion = "CONTROL ARDUINO ACTIVO"
+        estilo_accion = {'padding': '15px', 'backgroundColor': '#d5f4e6', 'borderRadius': '5px', 
+                         'textAlign': 'center', 'fontSize': '18px', 'fontWeight': 'bold', 'color': '#27ae60'}
+    else:  # sensor RC - Python controla
+        # Control con histéresis (margen de 10g como en Arduino)
+        ultima_accion = store_control.get('ultima_accion', None)
+        
+        if error > margen:  # Nivel muy bajo, llenar
+            if ultima_accion != 'llenar':
+                com.comando_llenar(ser)
+                time.sleep(0.1)
+                store_control['ultima_accion'] = 'llenar'
+            accion = "LLENANDO"
+            estilo_accion = {'padding': '15px', 'backgroundColor': '#d4edda', 'borderRadius': '5px',
+                             'textAlign': 'center', 'fontSize': '18px', 'fontWeight': 'bold', 'color': '#155724'}
+        elif error < -margen:  # Nivel muy alto, vaciar
+            if ultima_accion != 'vaciar':
+                com.comando_vaciar(ser)
+                time.sleep(0.1)
+                store_control['ultima_accion'] = 'vaciar'
+            accion = "VACIANDO"
+            estilo_accion = {'padding': '15px', 'backgroundColor': '#fff3cd', 'borderRadius': '5px',
+                             'textAlign': 'center', 'fontSize': '18px', 'fontWeight': 'bold', 'color': '#856404'}
+        else:  # En rango, parar
+            if ultima_accion not in [None, 'parar']:
+                com.comando_parar(ser)
+                time.sleep(0.1)
+                store_control['ultima_accion'] = 'parar'
+            accion = "EN CONSIGNA"
+            estilo_accion = {'padding': '15px', 'backgroundColor': '#d5f4e6', 'borderRadius': '5px',
+                             'textAlign': 'center', 'fontSize': '18px', 'fontWeight': 'bold', 'color': '#27ae60'}
     
     # Calcular tiempo transcurrido
     tiempo_actual = time.time() - store_control.get('tiempo_inicio', time.time())
@@ -1178,7 +1213,9 @@ def proceso_control_automatico(n_intervals, n_limpiar, store_control, historial)
         historial['consigna'] = historial['consigna'][-100:]
         historial['error'] = historial['error'][-100:]
     
-    # Crear gráfica con margen fijo de ±10g del Arduino
+    # Crear gráfica con margen fijo de ±10g
+    titulo_grafica = 'Control de Nivel en Tiempo Real (Arduino)' if sensor == 'bascula' else 'Control de Nivel en Tiempo Real (Python + RC)'
+    
     figura = {
         'data': [
             go.Scatter(x=historial['tiempo'], y=historial['nivel'], 
@@ -1197,7 +1234,7 @@ def proceso_control_automatico(n_intervals, n_limpiar, store_control, historial)
                       fill='tonexty', fillcolor='rgba(149, 165, 166, 0.1)')
         ],
         'layout': {
-            'title': 'Control de Nivel en Tiempo Real (Arduino)',
+            'title': titulo_grafica,
             'xaxis': {'title': 'Tiempo (s)'},
             'yaxis': {'title': 'Peso (g)'},
             'hovermode': 'x unified',
@@ -1222,7 +1259,7 @@ def proceso_control_automatico(n_intervals, n_limpiar, store_control, historial)
             nivel_str, consigna_str, error_str,
             accion, estilo_accion,
             figura, historial,
-            estado_data, nivel_str, consigna_str, error_str, accion_data, figura)
+            estado_data, nivel_str, consigna_str, error_str, accion_data, figura, store_control)
 
 # Callback para actualizar info de sensor disponible
 @app.callback(
