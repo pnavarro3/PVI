@@ -97,7 +97,7 @@ Los objetivos principales de este entregable son:
 \begin{enumerate}
     \item \textbf{Interfaz HMI completa}: Desarrollar una aplicación web con Dash que permita controles manuales, visualización en tiempo real y feedback visual del estado del sistema.
     
-    \item \textbf{Calibración interactiva}: Implementar un proceso automatizado para establecer la relación entre la señal del sensor RC y el nivel real mediante interpolación.
+    \item \textbf{Calibración interactiva}: Implementar un proceso automatizado para establecer la relación entre la señal del sensor RC y el nivel real mediante interpolacion.
     
     \item \textbf{Control automático}: Crear un sistema de control en lazo cerrado que mantenga el depósito en una consigna determinada utilizando cualquiera de los sensores.
     
@@ -168,7 +168,8 @@ En el sentido de \textbf{control}, los comandos fluyen desde la interfaz de usua
 
 La primera pestaña de la aplicación, denominada Setup, proporciona las funciones básicas de configuración y manejo manual del sistema. El diseño de esta interfaz sigue principios de usabilidad que priorizan la claridad y la facilidad de uso, organizando los elementos en dos columnas principales que separan claramente las funciones de control de las de visualización.
 
-La columna izquierda contiene los controles de actuación, presentados como botones claramente etiquetados que permiten al operador interactuar directamente con las bombas del sistema. Cada botón tiene un color distintivo que facilita su identificación rápida: verde para el llenado, naranja para el vaciado, y rojo para la parada de emergencia. La columna derecha presenta la información de monitorización, mostrando el estado actual del sistema mediante indicadores visuales y valores numéricos. Controles disponibles:
+La columna izquierda contiene los controles de actuación, presentados como botones claramente etiquetados que permiten al operador interactuar directamente con las bombas del sistema. 
+La columna derecha presenta la información de monitorización, mostrando el estado actual del sistema mediante indicadores visuales y valores numéricos. Controles disponibles:
 \begin{itemize}
     \item \textbf{Botón Llenar}: Activa la bomba de llenado
     \item \textbf{Botón Vaciar}: Activa la bomba de extracción
@@ -201,28 +202,39 @@ La implementación utiliza \texttt{dash.callback\_context} para determinar qué 
 
 \begin{lstlisting}[language=Python, caption=Callback de control manual]
 @app.callback(
-    [Output('intervalo-lectura', 'disabled'),
-     Output('estado-sistema', 'children')],
-    [Input('btn-llenar', 'n_clicks'),
-     Input('btn-vaciar', 'n_clicks'),
-     Input('btn-parar', 'n_clicks')]
+    Output('interval-peso', 'disabled'),
+    [Input('button-llenar', 'n_clicks'),
+     Input('button-vaciar', 'n_clicks'),
+     Input('button-stop', 'n_clicks')],
+    prevent_initial_call=True
 )
-def controlar_bombas(n_llenar, n_vaciar, n_parar):
+def controlar_interval(n_llenar, n_vaciar, n_stop):
     ctx = dash.callback_context
     if not ctx.triggered:
-        return True, "Sistema detenido"
+        return dash.no_update
     
-    boton_id = ctx.triggered[0]['prop_id'].split('.')[0]
+    # Verificar que el trigger sea por un cambio en n_clicks, no por inicializacion
+    trigger_prop = ctx.triggered[0]['prop_id']
+    if '.n_clicks' not in trigger_prop:
+        return dash.no_update
     
-    if boton_id == 'btn-llenar':
-        comando_llenar(arduino)
-        return False, "Llenando..."
-    elif boton_id == 'btn-vaciar':
-        comando_vaciar(arduino)
-        return False, "Vaciando..."
-    else:  # btn-parar
-        comando_parar(arduino)
-        return True, "Sistema detenido"
+    button_id = ctx.triggered[0]['prop_id'].split('.')[0]
+    
+    # Verificar que realmente se hizo click (n_clicks > 0)
+    if n_llenar is None and n_vaciar is None and n_stop is None:
+        return dash.no_update
+    
+    if button_id == 'button-llenar' and n_llenar > 0:
+        com.comando_llenar(ser)
+        return False  # Activa interval
+    elif button_id == 'button-vaciar' and n_vaciar > 0:
+        com.comando_vaciar(ser)
+        return False  # Activa interval
+    elif button_id == 'button-stop' and n_stop > 0:
+        com.comando_parar(ser)
+        return True   # Desactiva interval
+    
+    return dash.no_update
 \end{lstlisting}
 
 El callback utiliza \texttt{dash.callback\_context} para determinar qué botón fue presionado y ejecuta la función de comunicación correspondiente del módulo \texttt{ComWeb.py}.
@@ -237,12 +249,12 @@ El sensor capacitivo RC utilizado en este sistema proporciona una señal analóg
 
 El proceso de calibración se basa en la adquisición de una serie de puntos de referencia en los que se conoce tanto el valor de la señal del sensor RC como el peso real del agua, medido mediante la báscula de precisión. Estos puntos de calibración se distribuyen a lo largo de todo el rango de operación del sistema, desde el depósito vacío hasta el nivel máximo de llenado. La distribución de los puntos debe ser suficientemente densa para capturar cualquier no linealidad en la respuesta del sensor.
 
-Una vez adquiridos los puntos, se aplica un algoritmo de interpolación que genera una función continua capaz de estimar el peso correspondiente a cualquier valor de la señal RC. Los pasos fundamentales del proceso son:
+Una vez adquiridos los puntos, se aplica un algoritmo de interpolacion que genera una función continua capaz de estimar el peso correspondiente a cualquier valor de la señal RC. Los pasos fundamentales del proceso son:
 
 \begin{enumerate}
     \item Adquisición de puntos de referencia (peso báscula vs. integral RC)
     \item Distribución uniforme en todo el rango de operación
-    \item Generación de función de interpolación continua
+    \item Generación de función de interpolacion continua
 \end{enumerate}
 
 \subsection{Interfaz de Calibración}
@@ -265,7 +277,7 @@ Botón RUN & Inicia secuencia automatizada de calibración \\
 Botón STOP & Detiene el proceso en cualquier momento \\
 Indicador estado & Muestra fase actual y progreso \\
 Gráfica dispersión & Visualiza puntos (integral RC vs. peso) en tiempo real \\
-Botón Ajustar & Genera modelo de interpolación tras adquisición \\
+Botón Ajustar & Genera modelo de interpolacion tras adquisición \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -291,53 +303,89 @@ Las fases del proceso automatizado son:
     \item \textbf{Finalización}: Detiene bombas, habilita generación de modelo
 \end{enumerate}
 
-\begin{lstlisting}[language=Python, caption=Lógica de control durante calibración]
-def proceso_calibracion(peso_actual, objetivo, tolerancia=5):
-    diferencia = objetivo - peso_actual
-    
-    if abs(diferencia) <= tolerancia:
-        comando_parar(arduino)
-        return "MEDIDA_TOMADA"
-    elif diferencia > 0:
-        comando_llenar(arduino)
-        return "LLENANDO"
-    else:
-        comando_vaciar(arduino)
-        return "VACIANDO"
-\end{lstlisting}
-
 \subsection{Generación del Modelo}
 
-Una vez completada la adquisición de los puntos de calibración, el usuario puede generar el modelo matemático que permitirá convertir las lecturas del sensor RC en valores de peso equivalentes. Este modelo es una función de interpolación que, dado un valor de integral RC, devuelve el peso estimado correspondiente.
+Una vez completada la adquisición de los puntos de calibración, el usuario puede generar el modelo matemático que permitirá convertir las lecturas del sensor RC en valores de peso equivalentes. Este modelo es una función de interpolacion que, dado un valor de integral RC, devuelve el peso estimado correspondiente.
 
-La biblioteca SciPy proporciona la función \texttt{interp1d} que implementa varios métodos de interpolación. Para este sistema se ha elegido la interpolación lineal, que conecta los puntos de calibración mediante segmentos rectos. Aunque existen métodos más sofisticados como los splines cúbicos, la interpolación lineal ofrece ventajas importantes: es computacionalmente eficiente, no produce oscilaciones espurias entre los puntos de datos, y proporciona resultados predecibles incluso cuando los datos contienen cierto nivel de ruido.
+La biblioteca SciPy proporciona la función \texttt{interp1d} que implementa varios métodos de interpolacion. Para este sistema se ha elegido la interpolacion lineal, que conecta los puntos de calibración mediante segmentos rectos. Aunque existen métodos más sofisticados como los splines cúbicos, la interpolacion lineal ofrece ventajas importantes: es computacionalmente eficiente, no produce oscilaciones espurias entre los puntos de datos, y proporciona resultados predecibles incluso cuando los datos contienen cierto nivel de ruido.
 
 El código que implementa la generación del modelo utiliza \texttt{scipy.interpolate.interp1d}:
 
-\begin{lstlisting}[language=Python, caption=Generación de función de interpolación]
-from scipy.interpolate import interp1d
-import numpy as np
-
-def generar_modelo_calibracion(datos_calibracion):
-    integrales = np.array([d['integral'] for d in datos_calibracion])
-    pesos = np.array([d['peso'] for d in datos_calibracion])
+\begin{lstlisting}[language=Python, caption=Generación de función de interpolacion]
+from scipy.interpolate import interp1d, UnivariateSpline
+.
+.
+.
+.
+    @app.callback(
+    [Output('resultado-ajuste', 'children'),
+     Output('store-calibracion-resultado-ajuste', 'data', allow_duplicate=True)],
+    Input('button-ajuste', 'n_clicks'),
+    prevent_initial_call=True
+)
+def realizar_ajuste(n_clicks):
+    global datos_calibracion, ajuste_realizado, funcion_interpolacion, tipo_interpolacion_actual
     
-    # Ordenar por integral para interpolacion correcta
-    indices = np.argsort(integrales)
-    integrales = integrales[indices]
-    pesos = pesos[indices]
+    if not datos_calibracion or len(datos_calibracion) < 2:
+        error_msg = "Error: Se necesitan al menos 2 medidas para realizar la interpolacion"
+        return error_msg, error_msg
     
-    # Crear funcion de interpolacion lineal
-    funcion_calibracion = interp1d(
-        integrales, pesos,
-        kind='linear',
-        fill_value='extrapolate'
-    )
+    # Extraer datos
+    pesos = np.array([d[0] for d in datos_calibracion])
+    integrales = np.array([d[1] for d in datos_calibracion])
     
-    return funcion_calibracion
+    # Verificar que no haya valores duplicados en integrales (requerido para interpolacion)
+    if len(np.unique(integrales)) < len(integrales):
+        error_msg = "Error: Hay valores de integral duplicados. Se necesitan valores unicos para interpolar."
+        return error_msg, error_msg
+    
+    try:
+        # Ordenar los datos por integral (requerido para interpolacion)
+        indices = np.argsort(integrales)
+        integrales_sorted = integrales[indices]
+        pesos_sorted = pesos[indices]
+        
+        # Crear interpolacion lineal
+        funcion_interpolacion = interp1d(integrales_sorted, pesos_sorted, kind='linear', 
+                                        fill_value='extrapolate')
+        nombre_metodo = "Interpolacion Lineal"
+        descripcion = "Conecta los puntos con lineas rectas (scipy.interpolate.interp1d)"
+        
+        # Calcular error de interpolacion en los puntos conocidos
+        pesos_interpolados = funcion_interpolacion(integrales_sorted)
+        
+        # Calcular R^2 y error
+        ss_res = np.sum((pesos_sorted - pesos_interpolados) ** 2)
+        ss_tot = np.sum((pesos_sorted - np.mean(pesos_sorted)) ** 2)
+        r_squared = 1 - (ss_res / ss_tot)
+        
+        rmse = np.sqrt(np.mean((pesos_sorted - pesos_interpolados) ** 2))
+        max_error = np.max(np.abs(pesos_sorted - pesos_interpolados))
+        
+        ajuste_realizado = True
+        tipo_interpolacion_actual = 'linear'
+        
+        resultado = html.Div([
+            html.H4('Interpolacion Completada', style={'color': '#27ae60'}),
+            html.P(f"Metodo: {nombre_metodo}", style={'fontSize': '13px', 'fontWeight': 'bold'}),
+            html.P(descripcion, style={'fontSize': '11px', 'fontStyle': 'italic', 'color': '#7f8c8d'}),
+            html.Div([
+                html.P(f"R^2 = {r_squared:.6f}", style={'fontWeight': 'bold', 'display': 'inline-block', 'marginRight': '15px'}),
+                html.P(f"RMSE = {rmse:.4f} g", style={'display': 'inline-block', 'marginRight': '15px'}),
+                html.P(f"Error max = {max_error:.4f} g", style={'display': 'inline-block'})
+            ]),
+            html.P(f"Puntos interpolados: {len(datos_calibracion)}", style={'fontSize': '11px'}),
+            html.P("Peso RC habilitado en Setup", style={'color': '#27ae60', 'fontWeight': 'bold'})
+        ])
+        
+        return resultado, resultado
+        
+    except Exception as e:
+        error_msg = f"Error al realizar interpolacion: {str(e)}"
+        return error_msg, error_msg
 \end{lstlisting}
 
-La interpolación lineal se elige por su eficiencia computacional, ausencia de oscilaciones espurias, y resultados predecibles incluso con datos ruidosos.
+La interpolacion lineal se elige por su eficiencia computacional, ausencia de oscilaciones espurias, y resultados predecibles incluso con datos ruidosos.
 
 \textbf{Métricas de calidad calculadas:}
 \begin{itemize}
@@ -418,30 +466,7 @@ La gráfica temporal muestra:
     \item Área semitransparente: Banda de tolerancia
 \end{itemize}
 
-\begin{lstlisting}[language=Python, caption=Actualización de gráfica de control]
-@app.callback(
-    Output('grafica-control', 'figure'),
-    [Input('intervalo-control', 'n_intervals')],
-    [State('historial-control', 'data'),
-     State('consigna-actual', 'data')]
-)
-def actualizar_grafica(n, historial, consigna):
-    fig = go.Figure()
-    
-    # Nivel actual
-    fig.add_trace(go.Scatter(
-        x=historial['tiempo'], y=historial['nivel'],
-        mode='lines', name='Nivel actual'
-    ))
-    
-    # Consigna y banda de histeresis
-    fig.add_hline(y=consigna, line_dash="dash", 
-                  annotation_text="Consigna")
-    fig.add_hrect(y0=consigna-10, y1=consigna+10,
-                  fillcolor="green", opacity=0.1)
-    
-    return fig
-\end{lstlisting}
+
 
 %==============================================================================
 \section{Comunicación SCPI: Ampliaciones y Problemas Encontrados}
@@ -479,7 +504,7 @@ El diseño inicial utilizaba el prefijo estándar \texttt{STATus:OPERation}, per
 InstVirtPA.SetCommandTreeBase(F("STATus:OPERation"));
 InstVirtPA.RegisterCommand(F(":LLENar"), &llenar);
 
-// SOLUCION: Usar palabra en español
+// SOLUCION: Usar palabra en castellano
 InstVirtPA.SetCommandTreeBase(F("ESTAdo"));
 InstVirtPA.RegisterCommand(F(":MEDicion?"), &medir);
 \end{lstlisting}
@@ -552,35 +577,48 @@ Los componentes \texttt{dcc.Interval} generan eventos periódicos que permiten a
 La estructura básica de la aplicación es la siguiente:
 
 \begin{lstlisting}[language=Python, caption=Estructura básica de la aplicación Dash]
-import dash
-from dash import dcc, html
-from dash.dependencies import Input, Output, State
-
+# Crear la aplicacion
 app = dash.Dash(__name__)
 
-# Layout con pestanas
+# Layout
 app.layout = html.Div([
-    dcc.Tabs([
-        dcc.Tab(label='Setup', children=[...]),
-        dcc.Tab(label='Calibracion RC', children=[...]),
-        dcc.Tab(label='Control Automatico', children=[...]),
-    ]),
+    html.H1("Sistema de control de volumen"),
+
+    dcc.Interval(id='interval-peso', interval=2000, disabled=True),  # 1 segundo, desactivado inicialmente
+    dcc.Interval(id='interval-calibracion', interval=2000, disabled=True),  # Para calibracion
+    dcc.Interval(id='interval-control', interval=2000, disabled=True),  # Para control automatico
+    dcc.Store(id='store-llenando', data=False),  # Almacena el estado
+    dcc.Store(id='store-calibrando', data={'activo': False, 'num_medidas': 0, 'medida_actual': 0}),
+    dcc.Store(id='store-control', data={'activo': False, 'sensor': 'bascula', 'consigna': 400}),
+    dcc.Store(id='store-historial-control', data={'tiempo': [], 'nivel': [], 'consigna': [], 'error': []}),
+    dcc.Store(id='store-margen', data=10),  # Margen fijo del Arduino
+    dcc.Store(id='store-calibracion-tabla', data=[]),
+    dcc.Store(id='store-calibracion-figura', data={'data': [], 'layout': {'title': 'Peso Bascula vs Integral RC'}}),
+    dcc.Store(id='store-calibracion-estado', data='Esperando...'),
+    dcc.Store(id='store-calibracion-resultado-ajuste', data=''),
+    dcc.Store(id='store-control-estado', data={'estado': 'DETENIDO', 'estilo': {'padding': '15px', 'backgroundColor': '#ecf0f1', 'borderRadius': '5px', 'textAlign': 'center', 'fontSize': '18px', 'fontWeight': 'bold', 'color': '#e74c3c'}}),
+    dcc.Store(id='store-control-nivel', data='0 g'),
+    dcc.Store(id='store-control-consigna-display', data='400 g'),
+    dcc.Store(id='store-control-error', data='0 g'),
+    dcc.Store(id='store-control-accion', data={'texto': 'NINGUNA', 'estilo': {'padding': '15px', 'backgroundColor': '#ecf0f1', 'borderRadius': '5px', 'textAlign': 'center', 'fontSize': '18px', 'fontWeight': 'bold'}}),
+    dcc.Store(id='store-control-figura', data={'data': [], 'layout': {'title': 'Control de Nivel en Tiempo Real'}}),
+    dcc.Store(id='store-setup', data={
+        'peso_bascula': 'N/A',
+        'valor_condensador': 'N/A',
+        'peso_rc': 'N/A',
+        'tank_style': {'width': '100%', 'height': '0%', 'backgroundColor': '#3498db', 'position': 'absolute', 'bottom': '0', 'transition': 'height 0.3s'}
+    }),
+    dcc.Interval(id='interval-rehidratacion', interval=100, max_intervals=1, disabled=True),
     
-    # Componentes de almacenamiento
-    dcc.Store(id='datos-calibracion', data=[]),
-    dcc.Store(id='historial-control', data={'tiempo': [], 'nivel': []}),
-    dcc.Store(id='funcion-calibracion', data=None),
-    
-    # Intervalos de actualizacion
-    dcc.Interval(id='intervalo-lectura', interval=2000, disabled=True),
-    dcc.Interval(id='intervalo-calibracion', interval=1000, disabled=True),
-    dcc.Interval(id='intervalo-control', interval=2000, disabled=True),
+    html.Div([
+        dcc.Tabs(id='tabs-example-1', value='tab-1', children=[
+            dcc.Tab(label='Setup', value='tab-1'),
+            dcc.Tab(label='Calibracion RC', value='tab-2'),
+            dcc.Tab(label='Control Automatico', value='tab-3'),
+        ]),
+        html.Div(id='tabs-example-content-1')
+    ])
 ])
-
-# Callbacks para cada funcionalidad...
-
-if __name__ == '__main__':
-    app.run_server(debug=True, port=8050)
 \end{lstlisting}
 
 %==============================================================================
@@ -715,7 +753,7 @@ Python & $\geq$ 3.8 & Entorno de ejecución \\
 Dash & $\geq$ 2.0 & Framework interfaz web \\
 Plotly & $\geq$ 5.0 & Gráficas interactivas \\
 NumPy & $\geq$ 1.20 & Procesamiento numérico \\
-SciPy & $\geq$ 1.7 & Funciones de interpolación \\
+SciPy & $\geq$ 1.7 & Funciones de interpolacion \\
 PySerial & $\geq$ 3.5 & Comunicación serie \\
 \bottomrule
 \end{tabular}
