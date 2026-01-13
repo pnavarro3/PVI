@@ -51,6 +51,7 @@ datos_calibracion = []
 ajuste_realizado = False
 funcion_interpolacion = None  # Función de interpolación
 tipo_interpolacion_actual = None  # Tipo de interpolación usado
+valor_integral = 0.0  # Valor de la integral del circuito RC
 
 #Funciones locales
 def medir_redpitaya():
@@ -132,6 +133,23 @@ app.layout = html.Div([
     dcc.Store(id='store-control', data={'activo': False, 'sensor': 'bascula', 'consigna': 400}),
     dcc.Store(id='store-historial-control', data={'tiempo': [], 'nivel': [], 'consigna': [], 'error': []}),
     dcc.Store(id='store-margen', data=10),  # Margen fijo del Arduino
+    dcc.Store(id='store-calibracion-tabla', data=[]),
+    dcc.Store(id='store-calibracion-figura', data={'data': [], 'layout': {'title': 'Peso Báscula vs Integral RC'}}),
+    dcc.Store(id='store-calibracion-estado', data='Esperando...'),
+    dcc.Store(id='store-calibracion-resultado-ajuste', data=''),
+    dcc.Store(id='store-control-estado', data={'estado': 'DETENIDO', 'estilo': {'padding': '15px', 'backgroundColor': '#ecf0f1', 'borderRadius': '5px', 'textAlign': 'center', 'fontSize': '18px', 'fontWeight': 'bold', 'color': '#e74c3c'}}),
+    dcc.Store(id='store-control-nivel', data='0 g'),
+    dcc.Store(id='store-control-consigna-display', data='400 g'),
+    dcc.Store(id='store-control-error', data='0 g'),
+    dcc.Store(id='store-control-accion', data={'texto': 'NINGUNA', 'estilo': {'padding': '15px', 'backgroundColor': '#ecf0f1', 'borderRadius': '5px', 'textAlign': 'center', 'fontSize': '18px', 'fontWeight': 'bold'}}),
+    dcc.Store(id='store-control-figura', data={'data': [], 'layout': {'title': 'Control de Nivel en Tiempo Real'}}),
+    dcc.Store(id='store-setup', data={
+        'peso_bascula': 'N/A',
+        'valor_condensador': 'N/A',
+        'peso_rc': 'N/A',
+        'tank_style': {'width': '100%', 'height': '0%', 'backgroundColor': '#3498db', 'position': 'absolute', 'bottom': '0', 'transition': 'height 0.3s'}
+    }),
+    dcc.Interval(id='interval-rehidratacion', interval=100, max_intervals=1, disabled=True),
     
     html.Div([
         dcc.Tabs(id='tabs-example-1', value='tab-1', children=[
@@ -278,9 +296,7 @@ def render_tab2():
                                style={'width': '100%', 'padding': '15px', 'backgroundColor': '#3498db',
                                       'color': 'white', 'border': 'none', 'borderRadius': '5px',
                                       'fontSize': '16px', 'fontWeight': 'bold'}),
-                    html.Div(id='resultado-ajuste',
-                            style={'marginTop': '20px', 'padding': '15px', 'backgroundColor': '#ecf0f1',
-                                   'borderRadius': '5px', 'minHeight': '80px'})
+                    html.Div(id='resultado-ajuste', style={'display': 'none'})
                 ])
             ], className='control-box', style={'display': 'inline-block', 'width': '400px',
                                                'verticalAlign': 'top', 'marginLeft': '50px', 'padding': '20px'})
@@ -454,6 +470,16 @@ def render_tab3():
 
 # Callbacks
 @app.callback(
+    Output('interval-rehidratacion', 'disabled'),
+    Output('interval-rehidratacion', 'max_intervals'),
+    Input('tabs-example-1', 'value'),
+    prevent_initial_call=True
+)
+def activar_rehidratacion(tab):
+    # Activar el interval brevemente para forzar la rehidratación
+    return False, 1
+
+@app.callback(
     Output('tabs-example-content-1', 'children'),
     Input('tabs-example-1', 'value')
 )
@@ -501,25 +527,54 @@ def controlar_interval(n_llenar, n_vaciar, n_stop):
     
     return dash.no_update
 
+# Rehidratar visualización de Setup al cambiar de pestaña
+@app.callback(
+    [Output('peso-bascula', 'children', allow_duplicate=True),
+     Output('valor-condensador','children', allow_duplicate=True),
+     Output('tank-fill','style', allow_duplicate=True),
+     Output('peso-rc', 'children', allow_duplicate=True)],
+    [Input('tabs-example-1', 'value'),
+     Input('interval-rehidratacion', 'n_intervals')],
+    [State('store-setup', 'data')],
+    prevent_initial_call='initial_duplicate'
+)
+def rehidratar_setup(tab, n_intervals, setup_data):
+    if tab == 'tab-1':
+        if setup_data and isinstance(setup_data, dict):
+            return (
+                setup_data.get('peso_bascula', 'N/A'),
+                setup_data.get('valor_condensador', 'N/A'),
+                setup_data.get('tank_style', {'width': '100%', 'height': '0%', 'backgroundColor': '#3498db', 'position': 'absolute', 'bottom': '0', 'transition': 'height 0.3s'}),
+                setup_data.get('peso_rc', 'N/A')
+            )
+        return ('N/A', 'N/A', {'width': '100%', 'height': '0%', 'backgroundColor': '#3498db', 'position': 'absolute', 'bottom': '0', 'transition': 'height 0.3s'}, 'N/A')
+    return dash.no_update, dash.no_update, dash.no_update, dash.no_update
+
 # Callback para tarar la báscula
 @app.callback(
     Output('peso-bascula', 'children', allow_duplicate=True),
+    Output('store-setup', 'data', allow_duplicate=True),
     Input('button-tarar', 'n_clicks'),
+    State('store-setup', 'data'),
     prevent_initial_call=True
 )
-def tarar_bascula(n_clicks):
-    if n_clicks > 0:
+def tarar_bascula(n_clicks, setup_data):
+    if n_clicks and n_clicks > 0:
         com.comando_tarar(ser)
         time.sleep(0.5)  # Esperar a que se complete el tarado
         peso = com.leer_peso(ser)
-        return f"{peso} g"
-    return dash.no_update
+        # Actualizar store de Setup con el nuevo peso
+        nuevo_store = dict(setup_data or {})
+        nuevo_store['peso_bascula'] = f"{peso} g"
+        return f"{peso} g", nuevo_store
+    return dash.no_update, dash.no_update
 # Modificar callback de actualizar_peso para incluir peso RC si hay ajuste
 @app.callback(
     Output('peso-bascula', 'children'),
     Output('valor-condensador','children'),
     Output('tank-fill','style'),
     Output('peso-rc', 'children'),
+    Output('store-setup', 'data', allow_duplicate=True),
     Input('interval-peso', 'n_intervals'),
     prevent_initial_call=True
 )
@@ -527,7 +582,10 @@ def actualizar_peso_completo(n_intervals):
     global ajuste_realizado, funcion_interpolacion, valor_integral
     
     peso = com.leer_peso(ser)
-    valor_rc = valor_integral
+    try:
+        valor_rc = float(valor_integral)
+    except Exception:
+        valor_rc = 0.0
     
     # Calcular peso RC si hay ajuste
     if ajuste_realizado and funcion_interpolacion is not None:
@@ -542,7 +600,14 @@ def actualizar_peso_completo(n_intervals):
     porcentaje = min(100, max(0, (peso_num / peso_maximo) * 100))
     estilo = estilo_tanque(porcentaje)
     
-    return f"{peso} g", f"{valor_rc:.2f}", estilo, peso_rc_str
+    store_setup = {
+        'peso_bascula': f"{peso} g",
+        'valor_condensador': f"{valor_rc:.2f}",
+        'peso_rc': peso_rc_str,
+        'tank_style': estilo
+    }
+
+    return f"{peso} g", f"{valor_rc:.2f}", estilo, peso_rc_str, store_setup
 
 ##########################################################################################
 
@@ -557,334 +622,296 @@ def actualizar_peso_completo(n_intervals):
     prevent_initial_call=True
 )
 def controlar_calibracion(n_run, n_stop, num_medidas, store_data):
-    global datos_calibracion, primerVaciado
-    
+    global datos_calibracion
+
     ctx = dash.callback_context
     if not ctx.triggered:
         return True, store_data
-    
+
     button_id = ctx.triggered[0]['prop_id'].split('.')[0]
-    
-    if button_id == 'button-run-calibracion' and n_run > 0:
-        # Iniciar calibración: calcular objetivos y empezar a vaciar
+
+    if button_id == 'button-run-calibracion' and n_run and n_run > 0:
+        # Iniciar: vaciar hasta 0 sin medir
         datos_calibracion = []
-        com.comando_vaciar(ser)  # Empezar desde vacío
-        primerVaciado = True
-        
+        com.comando_vaciar(ser)
         return False, {
-                'activo': True,
-                'num_medidas': num_medidas,
-                'medidas_por_ciclo': 5,      
-                'medidas_totales': 0,        # contador global
-                'medida_en_ciclo': 0         # contador dentro del ciclo
-            }
-    
-    elif button_id == 'button-stop-calibracion' and n_stop > 0:
-        # Detener calibración
+            'activo': True,
+            'num_medidas': int(num_medidas or 10),
+            'medidas_por_ciclo': 8,          # medidas por fase (llenado o vaciado)
+            'medidas_totales': 0,
+            'medida_en_fase': 0,
+            'modo': 'vaciando',              # primer vaciado sin medir
+            'primer_vaciado': True,
+            # Estado de filtro/antirruido
+            'hist_pesos': [],
+            'ultimo_peso_filtrado': 0.0,
+            'consec_en_margen': 0,
+            'ultima_medicion_ts': 0.0
+        }
+
+    if button_id == 'button-stop-calibracion' and n_stop and n_stop > 0:
         com.comando_parar(ser)
         return True, {'activo': False, 'num_medidas': 0, 'medida_actual': 0}
-    
+
     return True, store_data
 
 # Callback para proceso de calibración
+# Callback para rehidratar pestaña de calibración
+@app.callback(
+    [Output('estado-calibracion', 'children', allow_duplicate=True),
+     Output('tabla-calibracion', 'data', allow_duplicate=True),
+     Output('grafica-calibracion', 'figure', allow_duplicate=True),
+     Output('resultado-ajuste', 'children', allow_duplicate=True)],
+    [Input('tabs-example-1', 'value'),
+     Input('interval-rehidratacion', 'n_intervals')],
+    [State('store-calibracion-estado', 'data'),
+     State('store-calibracion-tabla', 'data'),
+     State('store-calibracion-figura', 'data'),
+     State('store-calibracion-resultado-ajuste', 'data')],
+    prevent_initial_call='initial_duplicate'
+)
+def rehidratar_calibracion(tab, n_intervals, estado, tabla, figura, resultado_ajuste):
+    if tab == 'tab-2':
+        # Proporcionar valores por defecto si los stores están vacíos
+        if estado is None or estado == '':
+            estado = 'Esperando...'
+        if tabla is None:
+            tabla = []
+        if figura is None:
+            figura = {'data': [], 'layout': {'title': 'Peso Báscula vs Integral RC', 'xaxis': {'title': 'Integral RC'}, 'yaxis': {'title': 'Peso (g)'}, 'hovermode': 'closest'}}
+        if resultado_ajuste is None or resultado_ajuste == '':
+            resultado_ajuste = ''
+        return estado, tabla, figura, resultado_ajuste
+    return dash.no_update, dash.no_update, dash.no_update, dash.no_update
+
 @app.callback(
     [Output('estado-calibracion', 'children'),
      Output('tabla-calibracion', 'data'),
      Output('grafica-calibracion', 'figure'),
      Output('store-calibrando', 'data', allow_duplicate=True),
-     Output('interval-calibracion', 'disabled', allow_duplicate=True)],
+     Output('interval-calibracion', 'disabled', allow_duplicate=True),
+     Output('store-calibracion-tabla', 'data', allow_duplicate=True),
+     Output('store-calibracion-figura', 'data', allow_duplicate=True),
+     Output('store-calibracion-estado', 'data', allow_duplicate=True)],
     Input('interval-calibracion', 'n_intervals'),
     [State('store-calibrando', 'data')],
     prevent_initial_call=True
 )
 def proceso_calibracion(n_intervals, store_data):
-    global datos_calibracion, valor_integral, primerVaciado, comienzaCiclos,llenando,vaciando
-    
-    if primerVaciado:
-        peso_str = com.leer_peso(ser)
-        try:
-            peso_actual = float(peso_str)
-        except (ValueError, TypeError):
-            peso_actual = 0
-        
-        if peso_actual > 0:
-            com.comando_vaciar(ser)
-            return "Vaciando depósito...", [], {'data': [], 'layout': {'title': 'Peso Báscula vs Integral RC'}}, store_data, False
-        else:
-            com.comando_parar(ser)
-            primerVaciado = False
-            comienzaCiclos = True
+    global datos_calibracion, valor_integral, funcion_interpolacion, ajuste_realizado, tipo_interpolacion_actual
 
-    if not store_data['activo']:
-        return "Esperando...", [], {'data': [], 'layout': {'title': 'Peso Báscula vs Integral RC'}}, store_data, True
-    
-    num_medidas = store_data['num_medidas']
-    medidas_por_ciclo = store_data['medidas_por_ciclo']
-    medidas_totales = store_data['medidas_totales']
-    medida_en_ciclo = store_data['medida_en_ciclo']
-    peso_minimo = 0  # Tanque vacío
-    peso_maximo = 600  # Tanque lleno
-    
-    # Número REAL de medidas en este ciclo (por si el último es parcial)
-    medidas_en_este_ciclo = min(
-        medidas_por_ciclo,
-        num_medidas - (medidas_totales - medida_en_ciclo)
-    )
+    if not store_data.get('activo', False):
+        tabla, fig = [], {'data': [], 'layout': {'title': 'Peso Báscula vs Integral RC'}}
+        return "Esperando...", tabla, fig, store_data, True, tabla, fig, "Esperando..."
 
-    if medidas_en_este_ciclo > 1:
-        peso_objetivo = peso_minimo + (peso_maximo - peso_minimo) * (
-            medida_en_ciclo / (medidas_en_este_ciclo - 1)
-        )
-    else:
-        peso_objetivo = peso_minimo
-    
-    if comienzaCiclos: 
-        com.comando_llenar(ser)
-        llenando = True
-        comienzaCiclos = False
-    # Si terminamos todas las medidas
-    if medidas_totales >= num_medidas:
-        com.comando_parar(ser)
-        estado = f"Calibración completada: {len(datos_calibracion)} medidas recolectadas"
-        
-        # Preparar datos para tabla
-        tabla_datos = [
-            {'medida': i+1, 'peso': f"{d[0]:.2f}", 'integral': f"{d[1]:.2f}"}
-            for i, d in enumerate(datos_calibracion)
-        ]
-        
-        # Preparar gráfica
-        if datos_calibracion:
-            pesos = [d[0] for d in datos_calibracion]
-            integrales = [d[1] for d in datos_calibracion]
-            
-            figura = {
-                'data': [
-                    go.Scatter(x=integrales, y=pesos, mode='markers', 
-                              marker=dict(size=10, color='blue'),
-                              name='Datos medidos')
-                ],
-                'layout': {
-                    'title': 'Peso Báscula vs Integral RC',
-                    'xaxis': {'title': 'Integral RC'},
-                    'yaxis': {'title': 'Peso (g)'},
-                    'hovermode': 'closest'
-                }
-            }
-        else:
-            figura = {'data': [], 'layout': {'title': 'Peso Báscula vs Integral RC'}}
-        
-        return estado, tabla_datos, figura, {'activo': False, 'num_medidas': num_medidas, 'medida_actual': store_data['medidas_totales']}, True
-    
-    # Leer peso actual
+    # Lectura de peso
     peso_str = com.leer_peso(ser)
     try:
         peso_actual = float(peso_str)
-    except ValueError:
-        peso_actual = 0
-    
-    margen = 20  # Margen de tolerancia en gramos
-    
-    # Verificar si hemos alcanzado el peso objetivo (con margen)
-    if abs(peso_actual - peso_objetivo) <= margen:
-        # Tomar medida
-        integral = valor_integral
-        datos_calibracion.append([peso_actual, integral])
-        
-        # Actualizar estado
-        store_data['medidas_totales'] += 1
-        store_data['medida_en_ciclo'] += 1
-        estado = (
-        f"Medida {store_data['medidas_totales']} de {num_medidas} "
-        f"(ciclo, paso {store_data['medida_en_ciclo']})"
-        )
+    except (ValueError, TypeError):
+        peso_actual = 0.0
 
-        if store_data['medida_en_ciclo'] >= store_data['medidas_por_ciclo']:
-            store_data['medida_en_ciclo'] = 0
+    # Parámetros
+    peso_min = 0
+    peso_max = 600
+    margen = 20
 
-        # 
-        if store_data['medidas_totales'] < store_data['num_medidas']:
+    # Estado
+    num_medidas = int(store_data['num_medidas'])
+    medidas_por_fase = int(store_data['medidas_por_ciclo'])  # ahora significa por fase
+    medidas_totales = int(store_data['medidas_totales'])
+    medida_en_fase = int(store_data.get('medida_en_fase', 0))
+    modo = store_data.get('modo', 'vaciando')
+    primer_vaciado = store_data.get('primer_vaciado', False)
+    # Estado de filtrado (con valores por defecto si faltan)
+    hist_pesos = list(store_data.get('hist_pesos', []))
+    ultimo_peso_filtrado = float(store_data.get('ultimo_peso_filtrado', 0.0))
+    consec_en_margen = int(store_data.get('consec_en_margen', 0))
+    ultima_medicion_ts = float(store_data.get('ultima_medicion_ts', 0.0))
 
-            # ¿Quedan medidas dentro del ciclo actual?
-            if store_data['medida_en_ciclo'] < store_data['medidas_por_ciclo']:
-
-                m = store_data['medida_en_ciclo']
-                M = store_data['medidas_por_ciclo']
-
-                # Ajuste por último ciclo parcial
-                medidas_en_este_ciclo = min(
-                    M,
-                    store_data['num_medidas'] - (store_data['medidas_totales'] - m)
-                )
-
-                if medidas_en_este_ciclo > 1:
-                    siguiente_objetivo = peso_minimo + (peso_maximo - peso_minimo) * (
-                        m / (medidas_en_este_ciclo - 1)
-                    )
-                else:
-                    siguiente_objetivo = peso_minimo
-
-                if siguiente_objetivo > peso_actual:
-                    com.comando_llenar(ser)
-                    llenando = True
-                    vaciando = False
-                else:
-                    com.comando_vaciar(ser)
-                    vaciando = True
-                    llenando = False
-
-            else:
-                # Fin de ciclo → volver a vacío
-                store_data['medida_en_ciclo'] = 0
-
-        else:
-            # Fin TOTAL
-            com.comando_parar(ser)
-    elif peso_actual > peso_objetivo and llenando and peso_actual < peso_maximo:
-        # Tomar medida
-        integral = valor_integral
-        datos_calibracion.append([peso_actual, integral])
-        
-        # Actualizar estado
-        store_data['medidas_totales'] += 1
-        store_data['medida_en_ciclo'] += 1
-        estado = (
-        f"Medida {store_data['medidas_totales']} de {num_medidas} "
-        f"(ciclo, paso {store_data['medida_en_ciclo']})"
-        )
-        # 
-        # 
-        if store_data['medidas_totales'] < store_data['num_medidas']:
-
-            # ¿Quedan medidas dentro del ciclo actual?
-            if store_data['medida_en_ciclo'] < store_data['medidas_por_ciclo']:
-
-                m = store_data['medida_en_ciclo']
-                M = store_data['medidas_por_ciclo']
-
-                # Ajuste por último ciclo parcial
-                medidas_en_este_ciclo = min(
-                    M,
-                    store_data['num_medidas'] - (store_data['medidas_totales'] - m)
-                )
-
-                if medidas_en_este_ciclo > 1:
-                    siguiente_objetivo = peso_minimo + (peso_maximo - peso_minimo) * (
-                        m / (medidas_en_este_ciclo - 1)
-                    )
-                else:
-                    siguiente_objetivo = peso_minimo
-
-                if siguiente_objetivo > peso_actual:
-                    com.comando_llenar(ser)
-                    llenando = True
-                    vaciando = False
-                else:
-                    com.comando_vaciar(ser)
-                    vaciando = True
-                    llenando = False
-
-            else:
-                # Fin de ciclo → volver a vacío
-                store_data['medida_en_ciclo'] = 0
-
-
-        else:
-            # Fin TOTAL
-            com.comando_parar(ser)
-    elif peso_actual < peso_objetivo and vaciando and peso_actual > peso_minimo: 
-        # Tomar medida
-        integral = valor_integral
-        datos_calibracion.append([peso_actual, integral])
-        
-        # Actualizar estado
-        store_data['medidas_totales'] += 1
-        store_data['medida_en_ciclo'] += 1
-        estado = (
-        f"Medida {store_data['medidas_totales']} de {num_medidas} "
-        f"(ciclo, paso {store_data['medida_en_ciclo']})"
-        )
-        # 
-        # 
-        if store_data['medidas_totales'] < store_data['num_medidas']:
-
-            # ¿Quedan medidas dentro del ciclo actual?
-            if store_data['medida_en_ciclo'] < store_data['medidas_por_ciclo']:
-
-                m = store_data['medida_en_ciclo']
-                M = store_data['medidas_por_ciclo']
-
-                # Ajuste por último ciclo parcial
-                medidas_en_este_ciclo = min(
-                    M,
-                    store_data['num_medidas'] - (store_data['medidas_totales'] - m)
-                )
-
-                if medidas_en_este_ciclo > 1:
-                    siguiente_objetivo = peso_minimo + (peso_maximo - peso_minimo) * (
-                        m / (medidas_en_este_ciclo - 1)
-                    )
-                else:
-                    siguiente_objetivo = peso_minimo
-
-                if siguiente_objetivo > peso_actual:
-                    com.comando_llenar(ser)
-                    llenando = True
-                    vaciando = False
-                else:
-                    com.comando_vaciar(ser)
-                    vaciando = True
-                    llenando = False
-
-            else:
-                # Fin de ciclo → volver a vacío
-                store_data['medida_en_ciclo'] = 0
-                
-        else:
-            # Fin TOTAL
-            com.comando_parar(ser)
-    else:
-        # Ajustar nivel para alcanzar objetivo
-        if llenando:
-            estado = f"Llenando hacia medida {store_data['medidas_totales'] + 1} (Actual: {peso_actual:.0f}g → Objetivo: {peso_objetivo:.0f}g)"
-        elif vaciando:
-            estado = f"Vaciando hacia medida {store_data['medidas_totales'] + 1} (Actual: {peso_actual:.0f}g → Objetivo: {peso_objetivo:.0f}g)"
-        
-    
-    # Preparar datos para visualización parcial
-    tabla_datos = [
-        {'medida': i+1, 'peso': f"{d[0]:.2f}", 'integral': f"{d[1]:.2f}"}
-        for i, d in enumerate(datos_calibracion)
-    ]
-    
-    if datos_calibracion:
-        pesos = [d[0] for d in datos_calibracion]
-        integrales = [d[1] for d in datos_calibracion]
-        
-        figura = {
-            'data': [
-                go.Scatter(x=integrales, y=pesos, mode='markers',
-                          marker=dict(size=10, color='blue'),
-                          name='Datos medidos')
-            ],
-            'layout': {
-                'title': 'Peso Báscula vs Integral RC',
-                'xaxis': {'title': 'Integral RC'},
-                'yaxis': {'title': 'Peso (g)'},
-                'hovermode': 'closest'
+    # Helpers visualización
+    def tabla_y_fig():
+        tabla = [
+            {'medida': i+1, 'peso': f"{d[0]:.2f}", 'integral': f"{d[1]:.2f}"}
+            for i, d in enumerate(datos_calibracion)
+        ]
+        if datos_calibracion:
+            pesos = [d[0] for d in datos_calibracion]
+            integrales = [d[1] for d in datos_calibracion]
+            fig = {
+                'data': [go.Scatter(x=integrales, y=pesos, mode='markers',
+                                    marker=dict(size=10, color='blue'),
+                                    name='Datos medidos')],
+                'layout': {'title': 'Peso Báscula vs Integral RC',
+                           'xaxis': {'title': 'Integral RC'},
+                           'yaxis': {'title': 'Peso (g)'},
+                           'hovermode': 'closest'}
             }
-        }
+        else:
+            fig = {'data': [], 'layout': {'title': 'Peso Báscula vs Integral RC'}}
+        return tabla, fig
+
+    # Fin global
+    if medidas_totales >= num_medidas:
+        com.comando_parar(ser)
+        estado = f"Calibración completada: {len(datos_calibracion)} medidas recolectadas"
+        tabla, fig = tabla_y_fig()
+        return estado, tabla, fig, store_data, True, tabla, fig
+
+    # Primer vaciado sin medir
+    if primer_vaciado:
+        if peso_actual > (peso_min + margen):
+            com.comando_vaciar(ser)
+            estado = f"Vaciando depósito... (Actual: {peso_actual:.0f}g → Objetivo: {peso_min}g)"
+            tabla, fig = tabla_y_fig()
+            return estado, tabla, fig, store_data, False, tabla, fig, estado
+        else:
+            com.comando_parar(ser)
+            store_data['primer_vaciado'] = False
+            store_data['modo'] = 'llenando'
+            store_data['medida_en_fase'] = 0
+            com.comando_llenar(ser)
+            estado = "Iniciando fase de llenado (mediciones)"
+            tabla, fig = tabla_y_fig()
+            return estado, tabla, fig, store_data, False, tabla, fig, estado
+
+    # Pendientes y tamaño de esta fase
+    pendientes = num_medidas - medidas_totales
+    M_este = max(1, min(medidas_por_fase, pendientes))
+
+    # Objetivo de esta fase (clamp para evitar negativos o > max)
+    if modo == 'llenando':
+        if M_este == 1:
+            objetivo = peso_max
+        else:
+            indice = min(max(0, medida_en_fase), M_este - 1)
+            objetivo = peso_min + (peso_max - peso_min) * (indice / (M_este - 1))
+    else:  # vaciando
+        if M_este == 1:
+            objetivo = peso_min
+        else:
+            indice = min(max(0, medida_en_fase), M_este - 1)
+            objetivo = peso_max - (peso_max - peso_min) * (indice / (M_este - 1))
+    objetivo = max(peso_min, min(peso_max, objetivo))
+
+    # Actualizar filtro de lectura (mediana de no-cero para mitigar picos)
+    # Mantener ventana corta para respuesta rápida
+    ventana = 5
+    if not (modo == 'vaciando' and objetivo > (peso_min + margen) and peso_actual == 0):
+        # Evita añadir ceros espurios en vaciado lejos de objetivo
+        hist_pesos.append(peso_actual)
+        if len(hist_pesos) > ventana:
+            hist_pesos = hist_pesos[-ventana:]
+
+    # Calcular peso filtrado (mediana de valores no-cero si hay)
+    no_ceros = [p for p in hist_pesos if p > 0]
+    if no_ceros:
+        peso_filtrado = float(np.median(no_ceros))
     else:
-        figura = {'data': [], 'layout': {'title': 'Peso Báscula vs Integral RC'}}
-    
-    return estado, tabla_datos, figura, store_data, False
+        peso_filtrado = peso_actual if peso_actual > 0 else ultimo_peso_filtrado
+
+    # Decidir acción de bomba hacia el objetivo actual
+    if modo == 'llenando':
+        com.comando_llenar(ser)
+        alcanzado_base = (peso_filtrado >= objetivo - margen)
+        estado_mov = f"Llenando hacia medida {medidas_totales + 1} (Actual: {peso_filtrado:.0f}g → Objetivo: {objetivo:.0f}g)"
+    else:
+        com.comando_vaciar(ser)
+        # En vaciado, ignora ceros espurios lejos de objetivo
+        if peso_filtrado == 0 and objetivo > (peso_min + margen):
+            alcanzado_base = False
+        else:
+            alcanzado_base = (peso_filtrado <= objetivo + margen)
+        estado_mov = f"Vaciando hacia medida {medidas_totales + 1} (Actual: {peso_filtrado:.0f}g → Objetivo: {objetivo:.0f}g)"
+
+    # Anti-rebotes: requiere lecturas consecutivas dentro de margen reducido
+    margen_consec = max(5, margen // 2)
+    en_margen_consec = False
+    if modo == 'llenando':
+        en_margen_consec = (peso_filtrado >= objetivo - margen_consec)
+    else:
+        en_margen_consec = (peso_filtrado <= objetivo + margen_consec) and not (peso_filtrado == 0 and objetivo > (peso_min + margen))
+
+    consec_en_margen = (consec_en_margen + 1) if en_margen_consec else 0
+    min_consec = 2  # exigir al menos 2 lecturas consecutivas en margen
+    alcanzado = alcanzado_base and (consec_en_margen >= min_consec)
+
+    # ¿Registrar medida?
+    if alcanzado:
+        datos_calibracion.append([peso_filtrado, valor_integral])
+        medidas_totales += 1
+        medida_en_fase += 1
+        store_data['medidas_totales'] = medidas_totales
+        store_data['medida_en_fase'] = medida_en_fase
+        store_data['ultima_medicion_ts'] = time.time()
+        estado = f"Medida {medidas_totales} de {num_medidas} ({modo}, paso {medida_en_fase}/{M_este})"
+
+        # Actualizar interpolación de forma incremental si hay suficientes puntos y valores únicos
+        try:
+            if len(datos_calibracion) >= 3:
+                pesos_inc = np.array([d[0] for d in datos_calibracion])
+                integrales_inc = np.array([d[1] for d in datos_calibracion])
+                if len(np.unique(integrales_inc)) >= 2:
+                    idx = np.argsort(integrales_inc)
+                    integrales_sorted_inc = integrales_inc[idx]
+                    pesos_sorted_inc = pesos_inc[idx]
+                    funcion_interpolacion = interp1d(integrales_sorted_inc, pesos_sorted_inc, kind='linear', fill_value='extrapolate')
+                    ajuste_realizado = True
+                    tipo_interpolacion_actual = 'linear'
+        except Exception:
+            pass
+
+        # ¿Fin global?
+        if medidas_totales >= num_medidas:
+            # Activar interpolación automáticamente para el RC en Setup
+            try:
+                pesos = np.array([d[0] for d in datos_calibracion])
+                integrales = np.array([d[1] for d in datos_calibracion])
+                if len(pesos) >= 2 and len(np.unique(integrales)) >= 2:
+                    indices = np.argsort(integrales)
+                    integrales_sorted = integrales[indices]
+                    pesos_sorted = pesos[indices]
+                    funcion = interp1d(integrales_sorted, pesos_sorted, kind='linear', fill_value='extrapolate')
+                    # Persistir globals para Setup
+                    funcion_interpolacion = funcion
+                    ajuste_realizado = True
+                    tipo_interpolacion_actual = 'linear'
+            except Exception:
+                pass
+
+            com.comando_parar(ser)
+            tabla, fig = tabla_y_fig()
+            estado_final = f"Calibración completada: {len(datos_calibracion)} medidas recolectadas"
+            return estado_final, tabla, fig, store_data, True, tabla, fig, estado_final
+
+        # ¿Fin de fase? Cambiar fase y reiniciar contador
+        if medida_en_fase >= M_este:
+            store_data['medida_en_fase'] = 0
+            if modo == 'llenando':
+                store_data['modo'] = 'vaciando'
+                com.comando_vaciar(ser)
+                estado += " → Fin de fase de llenado. Comienza vaciado (con mediciones)."
+            else:
+                store_data['modo'] = 'llenando'
+                com.comando_llenar(ser)
+                estado += " → Fin de fase de vaciado. Comienza llenado (con mediciones)."
+    else:
+        estado = estado_mov
+
+    # Persistir estado de filtro
+    store_data['hist_pesos'] = hist_pesos
+    store_data['ultimo_peso_filtrado'] = peso_filtrado
+    store_data['consec_en_margen'] = consec_en_margen
+
+    tabla, fig = tabla_y_fig()
+    return estado, tabla, fig, store_data, False, tabla, fig, estado
 
 
 
 # Callback para realizar ajuste
 @app.callback(
     [Output('resultado-ajuste', 'children'),
-     Output('peso-rc', 'children', allow_duplicate=True)],
+     Output('store-calibracion-resultado-ajuste', 'data', allow_duplicate=True)],
     Input('button-ajuste', 'n_clicks'),
     prevent_initial_call=True
 )
@@ -892,7 +919,8 @@ def realizar_ajuste(n_clicks):
     global datos_calibracion, ajuste_realizado, funcion_interpolacion, tipo_interpolacion_actual
     
     if not datos_calibracion or len(datos_calibracion) < 2:
-        return "Error: Se necesitan al menos 2 medidas para realizar la interpolación", "N/A"
+        error_msg = "Error: Se necesitan al menos 2 medidas para realizar la interpolación"
+        return error_msg, error_msg
     
     # Extraer datos
     pesos = np.array([d[0] for d in datos_calibracion])
@@ -900,7 +928,8 @@ def realizar_ajuste(n_clicks):
     
     # Verificar que no haya valores duplicados en integrales (requerido para interpolación)
     if len(np.unique(integrales)) < len(integrales):
-        return "Error: Hay valores de integral duplicados. Se necesitan valores únicos para interpolar.", "N/A"
+        error_msg = "Error: Hay valores de integral duplicados. Se necesitan valores únicos para interpolar."
+        return error_msg, error_msg
     
     try:
         # Ordenar los datos por integral (requerido para interpolación)
@@ -928,9 +957,6 @@ def realizar_ajuste(n_clicks):
         ajuste_realizado = True
         tipo_interpolacion_actual = 'linear'
         
-        # Calcular peso RC actual usando interpolación
-        peso_rc_actual = predecir_peso_desde_integral(valor_integral)
-        
         resultado = html.Div([
             html.H4('Interpolación Completada', style={'color': '#27ae60'}),
             html.P(f"Método: {nombre_metodo}", style={'fontSize': '13px', 'fontWeight': 'bold'}),
@@ -944,10 +970,11 @@ def realizar_ajuste(n_clicks):
             html.P("✓ Peso RC habilitado en Setup", style={'color': '#27ae60', 'fontWeight': 'bold'})
         ])
         
-        return resultado, f"{peso_rc_actual:.2f} g"
+        return resultado, resultado
         
     except Exception as e:
-        return f"Error al realizar interpolación: {str(e)}", "N/A"
+        error_msg = f"Error al realizar interpolación: {str(e)}"
+        return error_msg, error_msg
 
 def predecir_peso_desde_integral(integral_valor):
     """Función que usa la interpolación para predecir peso desde integral."""
@@ -998,8 +1025,12 @@ def controlar_sistema(n_iniciar, n_detener, sensor, consigna):
             # Con báscula: Arduino hace el control automático
             com.comando_consigna(consigna, ser)
             time.sleep(0.2)
-        # Con RC: la web hace el control (Arduino no puede leer RC directamente)
-        return False, {'activo': True, 'sensor': sensor, 'consigna': consigna, 'tiempo_inicio': time.time()}
+        else:
+            # Con RC: Python hace el control (Arduino no puede leer RC directamente)
+            # Asegurar que las bombas estén detenidas inicialmente
+            com.comando_parar(ser)
+            time.sleep(0.2)
+        return False, {'activo': True, 'sensor': sensor, 'consigna': consigna, 'tiempo_inicio': time.time(), 'ultima_accion': None}
     
     elif button_id == 'button-detener-control' and n_detener > 0:
         # Detener control (desactiva flag y para bombas)
@@ -1007,6 +1038,47 @@ def controlar_sistema(n_iniciar, n_detener, sensor, consigna):
         return True, {'activo': False, 'sensor': sensor, 'consigna': consigna}
     
     return True, {'activo': False, 'sensor': sensor, 'consigna': consigna}
+
+# Callback para rehidratar pestaña de control
+@app.callback(
+    [Output('estado-control', 'children', allow_duplicate=True),
+     Output('estado-control', 'style', allow_duplicate=True),
+     Output('nivel-actual', 'children', allow_duplicate=True),
+     Output('consigna-actual', 'children', allow_duplicate=True),
+     Output('error-control', 'children', allow_duplicate=True),
+     Output('accion-control', 'children', allow_duplicate=True),
+     Output('accion-control', 'style', allow_duplicate=True),
+     Output('grafica-control', 'figure', allow_duplicate=True)],
+    [Input('tabs-example-1', 'value'),
+     Input('interval-rehidratacion', 'n_intervals')],
+    [State('store-control-estado', 'data'),
+     State('store-control-nivel', 'data'),
+     State('store-control-consigna-display', 'data'),
+     State('store-control-error', 'data'),
+     State('store-control-accion', 'data'),
+     State('store-control-figura', 'data')],
+    prevent_initial_call='initial_duplicate'
+)
+def rehidratar_control(tab, n_intervals, estado_data, nivel, consigna, error, accion_data, figura):
+    if tab == 'tab-3':
+        # Proporcionar valores por defecto si los stores están vacíos
+        if estado_data is None:
+            estado_data = {'estado': 'DETENIDO', 'estilo': {'padding': '15px', 'backgroundColor': '#ecf0f1', 'borderRadius': '5px', 'textAlign': 'center', 'fontSize': '18px', 'fontWeight': 'bold', 'color': '#e74c3c'}}
+        if nivel is None:
+            nivel = '0 g'
+        if consigna is None:
+            consigna = '400 g'
+        if error is None:
+            error = '0 g'
+        if accion_data is None:
+            accion_data = {'texto': 'NINGUNA', 'estilo': {'padding': '15px', 'backgroundColor': '#ecf0f1', 'borderRadius': '5px', 'textAlign': 'center', 'fontSize': '18px', 'fontWeight': 'bold'}}
+        if figura is None:
+            figura = {'data': [], 'layout': {'title': 'Control de Nivel en Tiempo Real', 'xaxis': {'title': 'Tiempo (s)'}, 'yaxis': {'title': 'Peso (g)'}, 'hovermode': 'closest', 'showlegend': True}}
+        return (estado_data['estado'], estado_data['estilo'],
+                nivel, consigna, error,
+                accion_data['texto'], accion_data['estilo'],
+                figura)
+    return dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
 
 # Callback principal del control automático
 @app.callback(
@@ -1018,7 +1090,14 @@ def controlar_sistema(n_iniciar, n_detener, sensor, consigna):
      Output('accion-control', 'children'),
      Output('accion-control', 'style'),
      Output('grafica-control', 'figure'),
-     Output('store-historial-control', 'data')],
+     Output('store-historial-control', 'data'),
+     Output('store-control-estado', 'data', allow_duplicate=True),
+     Output('store-control-nivel', 'data', allow_duplicate=True),
+     Output('store-control-consigna-display', 'data', allow_duplicate=True),
+     Output('store-control-error', 'data', allow_duplicate=True),
+     Output('store-control-accion', 'data', allow_duplicate=True),
+     Output('store-control-figura', 'data', allow_duplicate=True),
+     Output('store-control', 'data', allow_duplicate=True)],
     [Input('interval-control', 'n_intervals'),
      Input('button-limpiar-grafica', 'n_clicks')],
     [State('store-control', 'data'),
@@ -1044,23 +1123,24 @@ def proceso_control_automatico(n_intervals, n_limpiar, store_control, historial)
                 'showlegend': True
             }
         }
-        return ('DETENIDO', 
-                {'padding': '15px', 'backgroundColor': '#ecf0f1', 'borderRadius': '5px', 
-                 'textAlign': 'center', 'fontSize': '18px', 'fontWeight': 'bold', 'color': '#e74c3c'},
-                '0 g', '0 g', '0 g', 'NINGUNA',
-                {'padding': '15px', 'backgroundColor': '#ecf0f1', 'borderRadius': '5px', 
-                 'textAlign': 'center', 'fontSize': '18px', 'fontWeight': 'bold'},
-                figura_vacia, historial_limpio)
+        estado_data = {'estado': 'DETENIDO', 'estilo': {'padding': '15px', 'backgroundColor': '#ecf0f1', 'borderRadius': '5px', 'textAlign': 'center', 'fontSize': '18px', 'fontWeight': 'bold', 'color': '#e74c3c'}}
+        accion_data = {'texto': 'NINGUNA', 'estilo': {'padding': '15px', 'backgroundColor': '#ecf0f1', 'borderRadius': '5px', 'textAlign': 'center', 'fontSize': '18px', 'fontWeight': 'bold'}}
+        store_control_reset = {'activo': False, 'sensor': store_control.get('sensor', 'bascula'), 'consigna': store_control.get('consigna', 400)}
+        return ('DETENIDO', estado_data['estilo'],
+                '0 g', '0 g', '0 g', 'NINGUNA', accion_data['estilo'],
+                figura_vacia, historial_limpio,
+                estado_data, '0 g', '0 g', '0 g', accion_data, figura_vacia, store_control_reset)
     
     # Si el control no está activo
     if not store_control.get('activo', False):
-        return ('DETENIDO', 
-                {'padding': '15px', 'backgroundColor': '#ecf0f1', 'borderRadius': '5px', 
-                 'textAlign': 'center', 'fontSize': '18px', 'fontWeight': 'bold', 'color': '#e74c3c'},
-                '0 g', f"{store_control.get('consigna', 0)} g", '0 g', 'NINGUNA',
-                {'padding': '15px', 'backgroundColor': '#ecf0f1', 'borderRadius': '5px', 
-                 'textAlign': 'center', 'fontSize': '18px', 'fontWeight': 'bold'},
-                {'data': [], 'layout': {'title': 'Control de Nivel en Tiempo Real'}}, historial)
+        estado_data = {'estado': 'DETENIDO', 'estilo': {'padding': '15px', 'backgroundColor': '#ecf0f1', 'borderRadius': '5px', 'textAlign': 'center', 'fontSize': '18px', 'fontWeight': 'bold', 'color': '#e74c3c'}}
+        accion_data = {'texto': 'NINGUNA', 'estilo': {'padding': '15px', 'backgroundColor': '#ecf0f1', 'borderRadius': '5px', 'textAlign': 'center', 'fontSize': '18px', 'fontWeight': 'bold'}}
+        consigna_str = f"{store_control.get('consigna', 0)} g"
+        figura_actual = {'data': [], 'layout': {'title': 'Control de Nivel en Tiempo Real'}}
+        return ('DETENIDO', estado_data['estilo'],
+                '0 g', consigna_str, '0 g', 'NINGUNA', accion_data['estilo'],
+                figura_actual, historial,
+                estado_data, '0 g', consigna_str, '0 g', accion_data, figura_actual, store_control)
     
     # Leer nivel según sensor seleccionado
     sensor = store_control.get('sensor', 'bascula')
@@ -1082,11 +1162,40 @@ def proceso_control_automatico(n_intervals, n_limpiar, store_control, historial)
     # Calcular error
     error = consigna - nivel_actual
     
-    # El Arduino maneja el control automáticamente
-    # Solo monitoreamos y mostramos el estado
-    accion = "CONTROL ARDUINO ACTIVO"
-    estilo_accion = {'padding': '15px', 'backgroundColor': '#d5f4e6', 'borderRadius': '5px', 
-                     'textAlign': 'center', 'fontSize': '18px', 'fontWeight': 'bold', 'color': '#27ae60'}
+    # Control según sensor
+    if sensor == 'bascula':
+        # El Arduino maneja el control automáticamente
+        accion = "CONTROL ARDUINO ACTIVO"
+        estilo_accion = {'padding': '15px', 'backgroundColor': '#d5f4e6', 'borderRadius': '5px', 
+                         'textAlign': 'center', 'fontSize': '18px', 'fontWeight': 'bold', 'color': '#27ae60'}
+    else:  # sensor RC - Python controla
+        # Control con histéresis (margen de 10g como en Arduino)
+        ultima_accion = store_control.get('ultima_accion', None)
+        
+        if error > margen:  # Nivel muy bajo, llenar
+            if ultima_accion != 'llenar':
+                com.comando_llenar(ser)
+                time.sleep(0.1)
+                store_control['ultima_accion'] = 'llenar'
+            accion = "LLENANDO"
+            estilo_accion = {'padding': '15px', 'backgroundColor': '#d4edda', 'borderRadius': '5px',
+                             'textAlign': 'center', 'fontSize': '18px', 'fontWeight': 'bold', 'color': '#155724'}
+        elif error < -margen:  # Nivel muy alto, vaciar
+            if ultima_accion != 'vaciar':
+                com.comando_vaciar(ser)
+                time.sleep(0.1)
+                store_control['ultima_accion'] = 'vaciar'
+            accion = "VACIANDO"
+            estilo_accion = {'padding': '15px', 'backgroundColor': '#fff3cd', 'borderRadius': '5px',
+                             'textAlign': 'center', 'fontSize': '18px', 'fontWeight': 'bold', 'color': '#856404'}
+        else:  # En rango, parar
+            if ultima_accion not in [None, 'parar']:
+                com.comando_parar(ser)
+                time.sleep(0.1)
+                store_control['ultima_accion'] = 'parar'
+            accion = "EN CONSIGNA"
+            estilo_accion = {'padding': '15px', 'backgroundColor': '#d5f4e6', 'borderRadius': '5px',
+                             'textAlign': 'center', 'fontSize': '18px', 'fontWeight': 'bold', 'color': '#27ae60'}
     
     # Calcular tiempo transcurrido
     tiempo_actual = time.time() - store_control.get('tiempo_inicio', time.time())
@@ -1104,7 +1213,9 @@ def proceso_control_automatico(n_intervals, n_limpiar, store_control, historial)
         historial['consigna'] = historial['consigna'][-100:]
         historial['error'] = historial['error'][-100:]
     
-    # Crear gráfica con margen fijo de ±10g del Arduino
+    # Crear gráfica con margen fijo de ±10g
+    titulo_grafica = 'Control de Nivel en Tiempo Real (Arduino)' if sensor == 'bascula' else 'Control de Nivel en Tiempo Real (Python + RC)'
+    
     figura = {
         'data': [
             go.Scatter(x=historial['tiempo'], y=historial['nivel'], 
@@ -1123,7 +1234,7 @@ def proceso_control_automatico(n_intervals, n_limpiar, store_control, historial)
                       fill='tonexty', fillcolor='rgba(149, 165, 166, 0.1)')
         ],
         'layout': {
-            'title': 'Control de Nivel en Tiempo Real (Arduino)',
+            'title': titulo_grafica,
             'xaxis': {'title': 'Tiempo (s)'},
             'yaxis': {'title': 'Peso (g)'},
             'hovermode': 'x unified',
@@ -1137,12 +1248,18 @@ def proceso_control_automatico(n_intervals, n_limpiar, store_control, historial)
     estilo_estado = {'padding': '15px', 'backgroundColor': '#d5f4e6', 'borderRadius': '5px', 
                      'textAlign': 'center', 'fontSize': '18px', 'fontWeight': 'bold', 'color': '#27ae60'}
     
+    nivel_str = f"{nivel_actual:.2f} g"
+    consigna_str = f"{consigna} g"
+    error_str = f"{error:.2f} g"
+    
+    estado_data = {'estado': estado_texto, 'estilo': estilo_estado}
+    accion_data = {'texto': accion, 'estilo': estilo_accion}
+    
     return (estado_texto, estilo_estado,
-            f"{nivel_actual:.2f} g",
-            f"{consigna} g",
-            f"{error:.2f} g",
+            nivel_str, consigna_str, error_str,
             accion, estilo_accion,
-            figura, historial)
+            figura, historial,
+            estado_data, nivel_str, consigna_str, error_str, accion_data, figura, store_control)
 
 # Callback para actualizar info de sensor disponible
 @app.callback(
@@ -1168,7 +1285,7 @@ def actualizar_info_sensor(tab):
 
 if __name__ == '__main__':
     try:
-        app.run(debug=True, use_reloader=False)
+        app.run(debug=False, use_reloader=False)
     except KeyboardInterrupt:
         print("Cerrando aplicación...")
         running = False
