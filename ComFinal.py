@@ -317,8 +317,12 @@ while True:
     elif opcion == "10":
         print("Cerrando conexión y terminando programa...")
         running = False
-        rp.close()
-        ser.close()
+        if rp:
+            rp.close()
+        if ser and ser.is_open:
+            ser.close()
+            print("Puerto serial cerrado correctamente")
+        time.sleep(0.5)  # Dar tiempo para que Windows libere el puerto
         break
     
     else:

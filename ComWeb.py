@@ -123,14 +123,18 @@ def comando_tarar(ser):
     print("Ejecutando: TARAR")
     enviar_comando("STATus:OPERation:TARCAL",ser)
 
-#Mirar como diferenciamos tarar de calibrar
-#def comando_calibrar():
-#    print("Ejecutando: CALIBRAR")
-#    enviar_comando("STATus:OPERation:CALibrar")
-
 def leer_peso(ser):
     respuesta = enviar_comando("ESTAdo:MEDicion?",ser, etiqueta="Peso")
     return respuesta if respuesta else "N/A"
+
+def comando_identificar(ser):
+    print("Enviado: Comando Identificar")
+    respuesta = enviar_comando("SYStem:VERsion?", ser, etiqueta = "ID")
+    return respuesta if respuesta else "N/A"
+
+def comando_consigna(consigna,ser):
+    print(f"Ejecutando: Ajuste a consigna {consigna}")
+    enviar_comando(f"STATus:OPERation:CONsigna {consigna}",ser)
 
 def comando_ciclo(ser,num_ciclos):
     enviar_comando(f"STATus:OPERation:CIClos {num_ciclos}",ser)

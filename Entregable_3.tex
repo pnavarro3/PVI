@@ -1,0 +1,783 @@
+\documentclass[12pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[spanish]{babel}
+\usepackage{graphicx}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{geometry}
+\usepackage{fancyhdr}
+\usepackage{titlesec}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{float}
+\usepackage{caption}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{longtable}
+
+\geometry{margin=2.5cm}
+
+% Configuración de colores para código
+\definecolor{codegreen}{rgb}{0,0.6,0}
+\definecolor{codegray}{rgb}{0.5,0.5,0.5}
+\definecolor{codepurple}{rgb}{0.58,0,0.82}
+\definecolor{backcolour}{rgb}{0.95,0.95,0.92}
+\definecolor{keywordblue}{rgb}{0,0,0.8}
+
+\lstdefinestyle{mystyle}{
+    backgroundcolor=\color{backcolour},   
+    commentstyle=\color{codegreen},
+    keywordstyle=\color{keywordblue}\bfseries,
+    numberstyle=\tiny\color{codegray},
+    stringstyle=\color{codepurple},
+    basicstyle=\ttfamily\footnotesize,
+    breakatwhitespace=false,         
+    breaklines=true,                 
+    captionpos=b,                    
+    keepspaces=true,                 
+    numbers=left,                    
+    numbersep=5pt,                  
+    showspaces=false,                
+    showstringspaces=false,
+    showtabs=false,                  
+    tabsize=2,
+    frame=single
+}
+\lstset{style=mystyle}
+
+% Encabezado y pie de página
+\pagestyle{fancy}
+\fancyhf{}
+\rhead{Instrumentación Virtual}
+\lhead{Entregable 3}
+\rfoot{Página \thepage}
+
+\title{
+    \vspace{-2cm}
+    \textbf{ENTREGABLE 3}\\
+    \large Sistema de Monitorización, Calibración y Control Automático de Nivel mediante Interfaz HMI\\
+    \vspace{0.5cm}
+    \normalsize Asignatura: Programación Virtual de Instrumentos
+}
+\author{Pablo Navarro Domínguez\\Álvaro Viña Pérez}
+\date{Enero 2026}
+
+\begin{document}
+
+\maketitle
+\thispagestyle{empty}
+
+\begin{abstract}
+Este documento presenta el desarrollo de un sistema de instrumentación virtual para la monitorización, calibración y control automático de nivel de un depósito de agua. El sistema integra una interfaz HMI desarrollada en Python con Dash, un Arduino UNO para la adquisición y actuación, y una Red Pitaya para el procesamiento del sensor capacitivo RC. El trabajo representa la culminación de los entregables anteriores, evolucionando hacia un instrumento virtual completo con capacidades de calibración automática y control en lazo cerrado.
+\end{abstract}
+
+\newpage
+\tableofcontents
+\newpage
+
+%==============================================================================
+\section{Introducción}
+%==============================================================================
+
+\subsection{Contextualización del Proyecto}
+
+Este tercer entregable representa la culminación del proyecto de Instrumentación Virtual, evolucionando desde los instrumentos físicos tradicionales de los entregables anteriores hacia un instrumento virtual completo con interfaz gráfica moderna. Mientras que el primer entregable se centró en el desarrollo del hardware de adquisición mediante Arduino y la integración de sensores físicos, y el segundo entregable abordó la implementación del protocolo de comunicación SCPI y las funciones básicas de control, este tercer entregable completa la implementación de un instrumento virtual completo.
+
+El sistema desarrollado controla el nivel de agua en un depósito utilizando dos tecnologías de sensado complementarias que proporcionan redundancia y permiten validar las mediciones:
+\begin{itemize}
+    \item \textbf{Báscula HX711}: Medidas directas de peso con precisión de $\pm$2g
+    \item \textbf{Sensor capacitivo RC}: Medidas indirectas procesadas por Red Pitaya
+\end{itemize}
+
+\subsection{Objetivos del Entregable}
+
+Los objetivos principales de este entregable son:
+
+\begin{enumerate}
+    \item \textbf{Interfaz HMI completa}: Desarrollar una aplicación web con Dash que permita controles manuales, visualización en tiempo real y feedback visual del estado del sistema.
+    
+    \item \textbf{Calibración interactiva}: Implementar un proceso automatizado para establecer la relación entre la señal del sensor RC y el nivel real mediante interpolacion.
+    
+    \item \textbf{Control automático}: Crear un sistema de control en lazo cerrado que mantenga el depósito en una consigna determinada utilizando cualquiera de los sensores.
+    
+    \item \textbf{Comunicación robusta}: Establecer comunicación fiable mediante protocolo SCPI sobre puerto serie (Arduino) y TCP/IP (Red Pitaya).
+\end{enumerate}
+
+\subsection{Justificación Tecnológica: Dash}
+
+La elección de Dash como framework para el desarrollo de la interfaz de usuario responde a múltiples consideraciones técnicas y prácticas. Dash es un framework de Python desarrollado por Plotly que permite crear aplicaciones web interactivas sin necesidad de conocimientos avanzados de tecnologías web como JavaScript, HTML o CSS. 
+
+Una de las principales ventajas de Dash es su arquitectura reactiva basada en callbacks, que permite definir relaciones entre los componentes de la interfaz de forma declarativa. Cuando el usuario interactúa con un elemento, Dash automáticamente ejecuta las funciones asociadas y actualiza los componentes dependientes, creando una experiencia fluida y responsiva sin necesidad de gestionar manualmente el estado de la aplicación.
+
+%==============================================================================
+\section{Arquitectura General del Sistema}
+%==============================================================================
+
+\subsection{Descripción del Sistema}
+
+El sistema desarrollado sigue una arquitectura de tres capas claramente diferenciadas que separan las responsabilidades y facilitan tanto el desarrollo como el mantenimiento. Esta separación permite modificar o actualizar cada capa de forma independiente sin afectar a las demás, lo que resulta especialmente útil en entornos de instrumentación donde los requisitos pueden evolucionar con el tiempo.
+
+En la capa superior se encuentra la interfaz de usuario, implementada como una aplicación web mediante Dash que se ejecuta en el ordenador del operador. Esta aplicación proporciona todos los controles y visualizaciones necesarios para operar el sistema, organizados en tres pestañas que corresponden a las tres funcionalidades principales del instrumento virtual. La capa intermedia gestiona el intercambio de información entre la aplicación y los dispositivos físicos, implementando el protocolo SCPI sobre diferentes canales de comunicación. En la capa inferior se encuentran los dispositivos físicos que interactúan directamente con el proceso.
+
+Las tres capas se organizan de la siguiente manera:
+
+\begin{enumerate}
+    \item \textbf{Capa de Presentación}: Aplicación web Dash con tres pestañas (Setup, Calibración RC, Control Automático)
+    \item \textbf{Capa de Comunicación}: Protocolo SCPI sobre serie (COM4) y TCP/IP (Red Pitaya)
+    \item \textbf{Capa de Hardware}: Arduino NANO + HX711, Red Pitaya, bombas DC
+\end{enumerate}
+
+\subsection{Componentes de Hardware}
+
+El elemento central es un Arduino NANO, que actúa como controlador principal gestionando tanto la lectura de sensores como el control de actuadores. El sistema de sensado está compuesto por dos elementos complementarios. El sensor principal es una báscula de precisión construida mediante una célula de carga conectada a un amplificador HX711, que convierte la pequeña señal diferencial en una señal digital legible por el Arduino. El segundo sensor es un circuito capacitivo RC cuya señal es procesada por una Red Pitaya, un dispositivo de adquisición de alta velocidad capaz de muestrear a frecuencias del orden de megahercios.
+
+El sistema de actuación está formado por dos bombas de agua controladas mediante un driver de motores, que permite regular la velocidad mediante señales PWM generadas por el Arduino.
+
+La siguiente tabla resume los componentes principales del sistema:
+
+\begin{table}[H]
+\centering
+\caption{Componentes hardware del sistema}
+\begin{tabular}{@{}llp{6cm}@{}}
+\toprule
+\textbf{Componente} & \textbf{Función} & \textbf{Características} \\
+\midrule
+Arduino NANO & Controlador principal & Lectura HX711, control PWM bombas, parser SCPI \\
+HX711 & Amplificador báscula & Precisión $\pm$2g, comunicación digital \\
+Red Pitaya & Adquisición RC & 100k muestras, cálculo integral señal \\
+Bombas DC & Actuadores & Control PWM, llenado/vaciado depósito \\
+Sensor RC & Nivel capacitivo & Señal analógica dependiente de nivel \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Flujo de Información}
+
+El flujo de datos en el sistema opera en dos direcciones claramente definidas, siguiendo un modelo cliente-servidor donde la aplicación Dash actúa como cliente que solicita información y envía comandos, mientras que los dispositivos de hardware actúan como servidores que responden a estas peticiones.
+
+En el sentido de \textbf{adquisición}, los datos fluyen desde los sensores hacia la interfaz de usuario. La báscula HX711 es leída continuamente por el Arduino, que aplica un filtrado mediante promediado de múltiples muestras para reducir el ruido inherente a la medida. Cuando la aplicación solicita el peso actual mediante un comando SCPI de consulta, el Arduino responde con el valor más reciente. Simultáneamente, la Red Pitaya opera de forma independiente, adquiriendo buffers de cien mil muestras de la señal del sensor RC, procesando estos datos para calcular la integral del valor absoluto, y almacenando el resultado en una variable accesible para la aplicación.
+
+En el sentido de \textbf{control}, los comandos fluyen desde la interfaz de usuario hacia los actuadores. Cuando el operador pulsa un botón o el sistema de control automático toma una decisión, se genera un comando SCPI que es transmitido al Arduino a través del puerto serie. El Arduino interpreta el comando utilizando un parser SCPI y ejecuta la acción correspondiente, ya sea activar una bomba, detener el sistema, o establecer una consigna para el control automático. Tras ejecutar la acción, el Arduino envía una respuesta de confirmación que permite a la aplicación verificar que el comando se ha procesado correctamente.
+
+%==============================================================================
+\section{Hito 1: Configuración y Manejo Manual}
+%==============================================================================
+
+\subsection{Diseño de la Interfaz de Configuración}
+
+La primera pestaña de la aplicación, denominada Setup, proporciona las funciones básicas de configuración y manejo manual del sistema. El diseño de esta interfaz sigue principios de usabilidad que priorizan la claridad y la facilidad de uso, organizando los elementos en dos columnas principales que separan claramente las funciones de control de las de visualización.
+
+La columna izquierda contiene los controles de actuación, presentados como botones claramente etiquetados que permiten al operador interactuar directamente con las bombas del sistema. 
+La columna derecha presenta la información de monitorización, mostrando el estado actual del sistema mediante indicadores visuales y valores numéricos. Controles disponibles:
+\begin{itemize}
+    \item \textbf{Botón Llenar}: Activa la bomba de llenado
+    \item \textbf{Botón Vaciar}: Activa la bomba de extracción
+    \item \textbf{Botón Parar}: Detiene inmediatamente cualquier operación (seguridad)
+    \item \textbf{Botón Tarar}: Establece el cero de la báscula en el peso actual
+\end{itemize}
+
+\subsection{Visualización del Estado}
+
+La sección de monitorización proporciona información visual completa sobre el estado actual del sistema, permitiendo al operador evaluar de un vistazo la situación del proceso. El diseño prioriza la legibilidad y la comprensión inmediata, utilizando tanto representaciones gráficas como valores numéricos para transmitir la información de forma redundante.
+
+El componente más destacado es una representación gráfica del depósito que muestra el nivel de llenado de forma intuitiva mediante un rectángulo que simula la forma del recipiente, con una zona coloreada en azul cuya altura es proporcional al porcentaje de llenado. Esta visualización permite al operador percibir el estado del sistema incluso a distancia o de forma periférica, complementando los valores numéricos precisos que requieren atención directa para su lectura.
+
+La sección de monitorización presenta los siguientes indicadores:
+
+\begin{itemize}
+    \item \textbf{Indicador gráfico}: Rectángulo que simula el depósito con zona azul proporcional al llenado
+    \item \textbf{Peso actual}: Valor en gramos de la báscula (actualización cada 2s)
+    \item \textbf{Integral RC}: Valor del sensor capacitivo (sin significado directo hasta calibración)
+    \item \textbf{Peso estimado RC}: Solo disponible tras calibración
+\end{itemize}
+
+\subsection{Implementación del Control Manual}
+
+El control manual de las bombas se implementa mediante el sistema de callbacks de Dash, que permite asociar funciones Python con eventos de la interfaz de usuario. Cuando el operador hace clic en uno de los botones de control, Dash detecta el cambio en la propiedad \texttt{n\_clicks} del componente y ejecuta automáticamente el callback asociado.
+
+El callback de control manual es responsable de dos tareas principales: enviar el comando SCPI apropiado al Arduino para controlar las bombas, y gestionar el estado del intervalo de actualización que determina si la interfaz debe refrescar periódicamente las lecturas de los sensores. Cuando se activa una bomba, el intervalo se habilita para que el operador pueda observar la evolución del nivel en tiempo real. Cuando se pulsa el botón de parada, el intervalo se deshabilita para reducir el tráfico de comunicación innecesario.
+
+La implementación utiliza \texttt{dash.callback\_context} para determinar qué botón específico activó el callback, ya que todos los botones comparten el mismo callback para simplificar la gestión del estado. El siguiente fragmento muestra la estructura del callback principal:
+
+\begin{lstlisting}[language=Python, caption=Callback de control manual]
+@app.callback(
+    Output('interval-peso', 'disabled'),
+    [Input('button-llenar', 'n_clicks'),
+     Input('button-vaciar', 'n_clicks'),
+     Input('button-stop', 'n_clicks')],
+    prevent_initial_call=True
+)
+def controlar_interval(n_llenar, n_vaciar, n_stop):
+    ctx = dash.callback_context
+    if not ctx.triggered:
+        return dash.no_update
+    
+    # Verificar que el trigger sea por un cambio en n_clicks, no por inicializacion
+    trigger_prop = ctx.triggered[0]['prop_id']
+    if '.n_clicks' not in trigger_prop:
+        return dash.no_update
+    
+    button_id = ctx.triggered[0]['prop_id'].split('.')[0]
+    
+    # Verificar que realmente se hizo click (n_clicks > 0)
+    if n_llenar is None and n_vaciar is None and n_stop is None:
+        return dash.no_update
+    
+    if button_id == 'button-llenar' and n_llenar > 0:
+        com.comando_llenar(ser)
+        return False  # Activa interval
+    elif button_id == 'button-vaciar' and n_vaciar > 0:
+        com.comando_vaciar(ser)
+        return False  # Activa interval
+    elif button_id == 'button-stop' and n_stop > 0:
+        com.comando_parar(ser)
+        return True   # Desactiva interval
+    
+    return dash.no_update
+\end{lstlisting}
+
+El callback utiliza \texttt{dash.callback\_context} para determinar qué botón fue presionado y ejecuta la función de comunicación correspondiente del módulo \texttt{ComWeb.py}.
+
+%==============================================================================
+\section{Hito 2: Calibración del Instrumento RC}
+%==============================================================================
+
+\subsection{Fundamentos del Proceso}
+
+El sensor capacitivo RC utilizado en este sistema proporciona una señal analógica cuya relación con el nivel de agua no es directa ni fácilmente predecible a partir de consideraciones teóricas. La capacitancia del circuito depende de múltiples factores, incluyendo la geometría del sensor, las propiedades dieléctricas del agua, la posición relativa de los electrodos, y posibles efectos parásitos. Por esta razón, es necesario realizar un proceso de calibración empírico que establezca la relación entre la señal medida y el nivel real de agua.
+
+El proceso de calibración se basa en la adquisición de una serie de puntos de referencia en los que se conoce tanto el valor de la señal del sensor RC como el peso real del agua, medido mediante la báscula de precisión. Estos puntos de calibración se distribuyen a lo largo de todo el rango de operación del sistema, desde el depósito vacío hasta el nivel máximo de llenado. La distribución de los puntos debe ser suficientemente densa para capturar cualquier no linealidad en la respuesta del sensor.
+
+Una vez adquiridos los puntos, se aplica un algoritmo de interpolacion que genera una función continua capaz de estimar el peso correspondiente a cualquier valor de la señal RC. Los pasos fundamentales del proceso son:
+
+\begin{enumerate}
+    \item Adquisición de puntos de referencia (peso báscula vs. integral RC)
+    \item Distribución uniforme en todo el rango de operación
+    \item Generación de función de interpolacion continua
+\end{enumerate}
+
+\subsection{Interfaz de Calibración}
+
+La segunda pestaña de la aplicación está dedicada íntegramente al proceso de calibración del sensor RC. El diseño de esta interfaz guía al usuario a través de las diferentes etapas del proceso, proporcionando controles para iniciar y detener la calibración, visualización del progreso en tiempo real, y herramientas para analizar los resultados obtenidos.
+
+El panel de configuración permite al usuario especificar el número de puntos de calibración deseados, lo que determina la resolución del modelo generado. Un mayor número de puntos proporciona una caracterización más precisa del sensor, pero requiere más tiempo para completar el proceso. El valor por defecto de diez puntos representa un compromiso razonable entre precisión y tiempo de ejecución para la mayoría de las aplicaciones.
+
+Los elementos principales de la interfaz de calibración son:
+
+\begin{table}[H]
+\centering
+\caption{Elementos de la interfaz de calibración}
+\begin{tabular}{@{}lp{8cm}@{}}
+\toprule
+\textbf{Elemento} & \textbf{Función} \\
+\midrule
+Campo numérico & Especifica número de puntos de calibración (defecto: 10) \\
+Botón RUN & Inicia secuencia automatizada de calibración \\
+Botón STOP & Detiene el proceso en cualquier momento \\
+Indicador estado & Muestra fase actual y progreso \\
+Gráfica dispersión & Visualiza puntos (integral RC vs. peso) en tiempo real \\
+Botón Ajustar & Genera modelo de interpolacion tras adquisición \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Automatización del Proceso}
+
+El proceso de calibración está completamente automatizado para minimizar la intervención del usuario y garantizar la reproducibilidad de los resultados. La automatización se implementa mediante una máquina de estados que gestiona las diferentes fases del proceso, controlando las bombas según sea necesario y registrando los datos en los momentos apropiados.
+
+El vaciado inicial es una fase crítica que garantiza un punto de partida conocido, eliminando cualquier incertidumbre sobre el contenido inicial del depósito. Una vez alcanzado el estado vacío, el sistema calcula los objetivos de peso para cada punto de calibración, distribuyéndolos uniformemente en el rango de operación. Para cada objetivo, el sistema controla las bombas hasta alcanzar el peso deseado, momento en el que se detiene y registra simultáneamente el peso de la báscula y la integral del sensor RC.
+
+Las fases del proceso automatizado son:
+
+\begin{enumerate}
+    \item \textbf{Vaciado inicial}: Activa bomba de vaciado hasta peso $\approx$ 0g
+    \item \textbf{Cálculo objetivos}: Distribuye N puntos uniformemente en el rango [0, max]
+    \item \textbf{Para cada objetivo}:
+    \begin{itemize}
+        \item Activa bomba correspondiente (llenado/vaciado)
+        \item Monitoriza peso hasta alcanzar objetivo $\pm$ tolerancia
+        \item Registra par (peso, integral RC)
+        \item Actualiza gráfica
+    \end{itemize}
+    \item \textbf{Finalización}: Detiene bombas, habilita generación de modelo
+\end{enumerate}
+
+\subsection{Generación del Modelo}
+
+Una vez completada la adquisición de los puntos de calibración, el usuario puede generar el modelo matemático que permitirá convertir las lecturas del sensor RC en valores de peso equivalentes. Este modelo es una función de interpolacion que, dado un valor de integral RC, devuelve el peso estimado correspondiente.
+
+La biblioteca SciPy proporciona la función \texttt{interp1d} que implementa varios métodos de interpolacion. Para este sistema se ha elegido la interpolacion lineal, que conecta los puntos de calibración mediante segmentos rectos. Aunque existen métodos más sofisticados como los splines cúbicos, la interpolacion lineal ofrece ventajas importantes: es computacionalmente eficiente, no produce oscilaciones espurias entre los puntos de datos, y proporciona resultados predecibles incluso cuando los datos contienen cierto nivel de ruido.
+
+El código que implementa la generación del modelo utiliza \texttt{scipy.interpolate.interp1d}:
+
+\begin{lstlisting}[language=Python, caption=Generación de función de interpolacion]
+from scipy.interpolate import interp1d, UnivariateSpline
+.
+.
+.
+.
+    @app.callback(
+    [Output('resultado-ajuste', 'children'),
+     Output('store-calibracion-resultado-ajuste', 'data', allow_duplicate=True)],
+    Input('button-ajuste', 'n_clicks'),
+    prevent_initial_call=True
+)
+def realizar_ajuste(n_clicks):
+    global datos_calibracion, ajuste_realizado, funcion_interpolacion, tipo_interpolacion_actual
+    
+    if not datos_calibracion or len(datos_calibracion) < 2:
+        error_msg = "Error: Se necesitan al menos 2 medidas para realizar la interpolacion"
+        return error_msg, error_msg
+    
+    # Extraer datos
+    pesos = np.array([d[0] for d in datos_calibracion])
+    integrales = np.array([d[1] for d in datos_calibracion])
+    
+    # Verificar que no haya valores duplicados en integrales (requerido para interpolacion)
+    if len(np.unique(integrales)) < len(integrales):
+        error_msg = "Error: Hay valores de integral duplicados. Se necesitan valores unicos para interpolar."
+        return error_msg, error_msg
+    
+    try:
+        # Ordenar los datos por integral (requerido para interpolacion)
+        indices = np.argsort(integrales)
+        integrales_sorted = integrales[indices]
+        pesos_sorted = pesos[indices]
+        
+        # Crear interpolacion lineal
+        funcion_interpolacion = interp1d(integrales_sorted, pesos_sorted, kind='linear', 
+                                        fill_value='extrapolate')
+        nombre_metodo = "Interpolacion Lineal"
+        descripcion = "Conecta los puntos con lineas rectas (scipy.interpolate.interp1d)"
+        
+        # Calcular error de interpolacion en los puntos conocidos
+        pesos_interpolados = funcion_interpolacion(integrales_sorted)
+        
+        # Calcular R^2 y error
+        ss_res = np.sum((pesos_sorted - pesos_interpolados) ** 2)
+        ss_tot = np.sum((pesos_sorted - np.mean(pesos_sorted)) ** 2)
+        r_squared = 1 - (ss_res / ss_tot)
+        
+        rmse = np.sqrt(np.mean((pesos_sorted - pesos_interpolados) ** 2))
+        max_error = np.max(np.abs(pesos_sorted - pesos_interpolados))
+        
+        ajuste_realizado = True
+        tipo_interpolacion_actual = 'linear'
+        
+        resultado = html.Div([
+            html.H4('Interpolacion Completada', style={'color': '#27ae60'}),
+            html.P(f"Metodo: {nombre_metodo}", style={'fontSize': '13px', 'fontWeight': 'bold'}),
+            html.P(descripcion, style={'fontSize': '11px', 'fontStyle': 'italic', 'color': '#7f8c8d'}),
+            html.Div([
+                html.P(f"R^2 = {r_squared:.6f}", style={'fontWeight': 'bold', 'display': 'inline-block', 'marginRight': '15px'}),
+                html.P(f"RMSE = {rmse:.4f} g", style={'display': 'inline-block', 'marginRight': '15px'}),
+                html.P(f"Error max = {max_error:.4f} g", style={'display': 'inline-block'})
+            ]),
+            html.P(f"Puntos interpolados: {len(datos_calibracion)}", style={'fontSize': '11px'}),
+            html.P("Peso RC habilitado en Setup", style={'color': '#27ae60', 'fontWeight': 'bold'})
+        ])
+        
+        return resultado, resultado
+        
+    except Exception as e:
+        error_msg = f"Error al realizar interpolacion: {str(e)}"
+        return error_msg, error_msg
+\end{lstlisting}
+
+La interpolacion lineal se elige por su eficiencia computacional, ausencia de oscilaciones espurias, y resultados predecibles incluso con datos ruidosos.
+
+\textbf{Métricas de calidad calculadas:}
+\begin{itemize}
+    \item $R^2$ (coeficiente de determinación): Proporción de variabilidad explicada
+    \item RMSE: Error cuadrático medio en gramos
+    \item Error máximo: Peor caso observado
+\end{itemize}
+
+%==============================================================================
+\section{Hito 3: Control Automático de Nivel}
+%==============================================================================
+
+\subsection{Principios del Control}
+
+El tercer hito del proyecto consiste en la implementación de un sistema de control automático que mantiene el nivel del depósito en un valor de consigna especificado por el usuario. Este control en lazo cerrado utiliza la realimentación de uno de los sensores disponibles para comparar el nivel actual con el deseado y actuar en consecuencia sobre las bombas.
+
+El algoritmo de control implementado es del tipo todo o nada con histéresis, también conocido como control on-off. El principio de funcionamiento se basa en comparar el nivel actual con la consigna y actuar de forma binaria: si el nivel está por debajo del objetivo, se activa el llenado; si está por encima, se activa el vaciado.
+
+La banda de histéresis cumple una función importante en la estabilidad del control. Sin ella, el sistema oscilaría continuamente alrededor de la consigna, activando y desactivando las bombas con alta frecuencia, lo que provocaría un desgaste prematuro de los actuadores y un consumo energético innecesario. El margen de histéresis de $\pm$10g establecido en el sistema proporciona una zona muerta que evita estas oscilaciones.
+
+Las reglas del control implementado son:
+
+\begin{itemize}
+    \item Si nivel $<$ consigna $-$ margen $\rightarrow$ Activar llenado
+    \item Si nivel $>$ consigna $+$ margen $\rightarrow$ Activar vaciado  
+    \item Si nivel dentro de banda $\rightarrow$ Sin acción
+\end{itemize}
+
+El margen de histéresis ($\pm$10g) evita oscilaciones continuas alrededor de la consigna, reduciendo el desgaste de actuadores y mejorando la eficiencia energética.
+
+\subsection{Selección del Sensor}
+
+Una característica distintiva del sistema desarrollado es la posibilidad de seleccionar qué sensor se utiliza para la realimentación del lazo de control. Esta flexibilidad permite al usuario elegir entre la báscula, que proporciona medidas directas y precisas, y el sensor RC calibrado, que ofrece una alternativa sin contacto con el líquido.
+
+La báscula es la opción por defecto y la más recomendable en la mayoría de las situaciones. Sus medidas son directas, precisas, y no requieren calibración previa más allá del tarado inicial. La comunicación con la báscula a través del Arduino es rápida y fiable, y el ruido de las medidas es relativamente bajo gracias al promediado de múltiples lecturas implementado en el firmware.
+
+El sensor RC representa una alternativa interesante para situaciones en las que el contacto físico con el líquido no es deseable o posible. Sin embargo, su uso requiere haber completado previamente el proceso de calibración descrito en la sección anterior. Si no se ha realizado la calibración, la opción del sensor RC aparece deshabilitada en la interfaz para evitar su uso inadvertido con resultados impredecibles.
+
+La siguiente tabla compara las características de ambos sensores:
+
+\begin{table}[H]
+\centering
+\caption{Comparativa de sensores para realimentación}
+\begin{tabular}{@{}lcc@{}}
+\toprule
+\textbf{Característica} & \textbf{Báscula} & \textbf{Sensor RC} \\
+\midrule
+Precisión típica & $\pm$2g & $\pm$5g (tras calibración) \\
+Requiere calibración & No (solo tarado) & Sí \\
+Contacto con líquido & Indirecto & Sin contacto \\
+Velocidad respuesta & Alta & Media \\
+Disponibilidad & Siempre & Solo tras calibrar \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Configuración y Visualización}
+
+La tercera pestaña de la aplicación proporciona una interfaz completa para configurar y monitorizar el proceso de control automático. El diseño sigue los mismos principios de usabilidad que las pestañas anteriores, separando claramente los controles de configuración de los elementos de visualización.
+
+El panel de configuración permite al usuario establecer la consigna deseada en gramos, seleccionar el sensor de realimentación, e iniciar o detener el proceso de control. Un indicador de estado muestra en todo momento si el control está activo o detenido, así como la acción actual que está realizando el sistema (llenando, vaciando, o en espera dentro de la banda de tolerancia).
+
+La visualización del proceso se realiza mediante una gráfica temporal que muestra la evolución del nivel a lo largo del tiempo, permitiendo al operador evaluar el comportamiento dinámico del sistema y detectar posibles anomalías. Esta gráfica es especialmente útil para ajustar los parámetros del control y para documentar el comportamiento del sistema durante las pruebas.
+
+Los elementos principales de configuración son:
+
+\begin{itemize}
+    \item \textbf{Campo consigna}: Valor objetivo en gramos (rango: 0-800g)
+    \item \textbf{Selector sensor}: Báscula o RC (RC deshabilitado si no hay calibración)
+    \item \textbf{Botones RUN/STOP}: Control del proceso automático
+\end{itemize}
+
+La gráfica temporal muestra:
+\begin{itemize}
+    \item Traza principal: Nivel actual medido
+    \item Línea discontinua: Consigna establecida
+    \item Líneas punteadas: Límites de histéresis ($\pm$10g)
+    \item Área semitransparente: Banda de tolerancia
+\end{itemize}
+
+
+
+%==============================================================================
+\section{Comunicación SCPI: Ampliaciones y Problemas Encontrados}
+%==============================================================================
+
+La comunicación SCPI entre la aplicación Dash y los dispositivos hardware sigue la arquitectura descrita en el Entregable 2, utilizando la biblioteca Vrekrer SCPI Parser en el Arduino y conexión TCP/IP con la Red Pitaya. En este apartado se documentan únicamente las ampliaciones realizadas y los problemas encontrados durante el desarrollo de la interfaz web.
+
+\subsection{Nuevos Comandos Implementados}
+
+Para soportar las funcionalidades de control automático, se han añadido los siguientes comandos al conjunto definido en el Entregable 2:
+
+\begin{table}[H]
+\centering
+\caption{Comandos SCPI añadidos en este entregable}
+\begin{tabular}{@{}llp{6cm}@{}}
+\toprule
+\textbf{Comando} & \textbf{Tipo} & \textbf{Descripción} \\
+\midrule
+\texttt{OPERacion:CONsigna\#} & Parámetro & Establece consigna de peso para control automático \\
+\texttt{OPERacion:CICLos\#} & Parámetro & Inicia control por ciclos de llenado/vaciado \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Problemas Encontrados y Limitaciones de la Biblioteca}
+
+Durante el desarrollo se identificaron varias limitaciones de la biblioteca Vrekrer SCPI Parser que requirieron modificaciones en el diseño original.
+
+\subsubsection{Conflicto con palabras reservadas SCPI}
+
+El diseño inicial utilizaba el prefijo estándar \texttt{STATus:OPERation}, pero se descubrió que \texttt{STATus} es una palabra reservada SCPI que la biblioteca interpreta de forma especial, provocando comportamientos erráticos:
+
+\begin{lstlisting}[language=C++, caption=Configuración problemática vs. corregida]
+// PROBLEMA: STATus es palabra reservada, causaba fallos
+InstVirtPA.SetCommandTreeBase(F("STATus:OPERation"));
+InstVirtPA.RegisterCommand(F(":LLENar"), &llenar);
+
+// SOLUCION: Usar palabra en castellano
+InstVirtPA.SetCommandTreeBase(F("ESTAdo"));
+InstVirtPA.RegisterCommand(F(":MEDicion?"), &medir);
+\end{lstlisting}
+
+\subsubsection{Límite de 6 comandos por TreeBase}
+
+La biblioteca tiene un límite interno de \textbf{6 comandos por TreeBase} que no está documentado. Este límite se manifestó al añadir el comando \texttt{CICLos}, provocando que algunos comandos dejaran de funcionar sin mensaje de error.
+
+La solución fue distribuir los comandos en múltiples TreeBases:
+
+\begin{lstlisting}[language=C++, caption=Distribución en múltiples TreeBases]
+// TreeBase 1: Comandos de operacion (6 max)
+InstVirtPA.SetCommandTreeBase(F("OPERacion"));
+InstVirtPA.RegisterCommand(F(":LLENar"), &llenar);
+InstVirtPA.RegisterCommand(F(":VACiar"), &vaciar);
+InstVirtPA.RegisterCommand(F(":PARAr"), &parar);
+InstVirtPA.RegisterCommand(F(":TARAr"), &tarar);
+InstVirtPA.RegisterCommand(F(":CONsigna#"), &consigna);
+InstVirtPA.RegisterCommand(F(":CICLos#"), &ciclos);
+
+// TreeBase 2: Consultas
+InstVirtPA.SetCommandTreeBase(F("ESTAdo"));
+InstVirtPA.RegisterCommand(F(":MEDicion?"), &medir);
+\end{lstlisting}
+
+\subsubsection{Recomendaciones}
+
+\begin{itemize}
+    \item Evitar palabras reservadas SCPI (\texttt{STATus}, \texttt{SYSTem}, \texttt{IEEE})
+    \item Planificar máximo 6 comandos por TreeBase desde el diseño inicial
+    \item Usar nombres en español para evitar conflictos con el estándar
+\end{itemize}
+
+%==============================================================================
+\section{Estructura del Código}
+%==============================================================================
+
+\subsection{Organización del Proyecto}
+
+El proyecto de software está organizado en varios archivos que separan las diferentes responsabilidades del sistema, siguiendo el principio de separación de responsabilidades que facilita el mantenimiento y la evolución del código. El archivo principal contiene la aplicación Dash completa, incluyendo tanto la definición del layout como los callbacks que implementan la lógica de la aplicación. Los módulos de comunicación encapsulan las funciones de interacción con los dispositivos de hardware, proporcionando una interfaz de alto nivel que abstrae los detalles del protocolo SCPI.
+
+Esta organización permite modificar la interfaz de usuario sin afectar a la lógica de comunicación, y viceversa. También facilita la reutilización del código de comunicación en otros proyectos que utilicen los mismos dispositivos de hardware pero con interfaces diferentes.
+
+\begin{table}[H]
+\centering
+\caption{Archivos del proyecto}
+\begin{tabular}{@{}llp{6cm}@{}}
+\toprule
+\textbf{Archivo} & \textbf{Líneas} & \textbf{Función} \\
+\midrule
+\texttt{InterfazWeb.py} & $\sim$1180 & Aplicación Dash principal (layout + callbacks) \\
+\texttt{ComWeb.py} & $\sim$80 & Funciones comunicación SCPI con Arduino \\
+\texttt{redpitaya\_scpi.py} & $\sim$50 & Clase comunicación TCP/IP Red Pitaya \\
+\texttt{PruebaSCPI.ino} & $\sim$200 & Firmware Arduino (parser + control) \\
+\texttt{assets/styles.css} & $\sim$100 & Estilos CSS de la interfaz \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Componentes Principales de la Aplicación}
+
+La aplicación Dash se estructura en tres elementos principales: el layout, que define la estructura visual de la interfaz; los callbacks, que implementan la lógica de la aplicación respondiendo a eventos del usuario; y los componentes de almacenamiento, que mantienen el estado de la aplicación entre diferentes interacciones.
+
+El layout utiliza una combinación de componentes HTML estándar y componentes especializados de Dash. Los componentes HTML proporcionan la estructura básica (divisiones, títulos, párrafos), mientras que los componentes Dash aportan funcionalidad interactiva (botones, campos de entrada, gráficas). La organización en pestañas mediante \texttt{dcc.Tabs} permite presentar las tres funcionalidades principales sin sobrecargar la interfaz.
+
+Los componentes \texttt{dcc.Store} permiten almacenar datos en el navegador del cliente, manteniendo el estado de la aplicación entre diferentes callbacks sin necesidad de utilizar variables globales en el servidor. Esto es especialmente importante para los datos de calibración, que deben persistir durante toda la sesión de uso.
+
+Los componentes \texttt{dcc.Interval} generan eventos periódicos que permiten actualizar la interfaz sin intervención del usuario, implementando la funcionalidad de monitorización en tiempo real.
+
+La estructura básica de la aplicación es la siguiente:
+
+\begin{lstlisting}[language=Python, caption=Estructura básica de la aplicación Dash]
+# Crear la aplicacion
+app = dash.Dash(__name__)
+
+# Layout
+app.layout = html.Div([
+    html.H1("Sistema de control de volumen"),
+
+    dcc.Interval(id='interval-peso', interval=2000, disabled=True),  # 1 segundo, desactivado inicialmente
+    dcc.Interval(id='interval-calibracion', interval=2000, disabled=True),  # Para calibracion
+    dcc.Interval(id='interval-control', interval=2000, disabled=True),  # Para control automatico
+    dcc.Store(id='store-llenando', data=False),  # Almacena el estado
+    dcc.Store(id='store-calibrando', data={'activo': False, 'num_medidas': 0, 'medida_actual': 0}),
+    dcc.Store(id='store-control', data={'activo': False, 'sensor': 'bascula', 'consigna': 400}),
+    dcc.Store(id='store-historial-control', data={'tiempo': [], 'nivel': [], 'consigna': [], 'error': []}),
+    dcc.Store(id='store-margen', data=10),  # Margen fijo del Arduino
+    dcc.Store(id='store-calibracion-tabla', data=[]),
+    dcc.Store(id='store-calibracion-figura', data={'data': [], 'layout': {'title': 'Peso Bascula vs Integral RC'}}),
+    dcc.Store(id='store-calibracion-estado', data='Esperando...'),
+    dcc.Store(id='store-calibracion-resultado-ajuste', data=''),
+    dcc.Store(id='store-control-estado', data={'estado': 'DETENIDO', 'estilo': {'padding': '15px', 'backgroundColor': '#ecf0f1', 'borderRadius': '5px', 'textAlign': 'center', 'fontSize': '18px', 'fontWeight': 'bold', 'color': '#e74c3c'}}),
+    dcc.Store(id='store-control-nivel', data='0 g'),
+    dcc.Store(id='store-control-consigna-display', data='400 g'),
+    dcc.Store(id='store-control-error', data='0 g'),
+    dcc.Store(id='store-control-accion', data={'texto': 'NINGUNA', 'estilo': {'padding': '15px', 'backgroundColor': '#ecf0f1', 'borderRadius': '5px', 'textAlign': 'center', 'fontSize': '18px', 'fontWeight': 'bold'}}),
+    dcc.Store(id='store-control-figura', data={'data': [], 'layout': {'title': 'Control de Nivel en Tiempo Real'}}),
+    dcc.Store(id='store-setup', data={
+        'peso_bascula': 'N/A',
+        'valor_condensador': 'N/A',
+        'peso_rc': 'N/A',
+        'tank_style': {'width': '100%', 'height': '0%', 'backgroundColor': '#3498db', 'position': 'absolute', 'bottom': '0', 'transition': 'height 0.3s'}
+    }),
+    dcc.Interval(id='interval-rehidratacion', interval=100, max_intervals=1, disabled=True),
+    
+    html.Div([
+        dcc.Tabs(id='tabs-example-1', value='tab-1', children=[
+            dcc.Tab(label='Setup', value='tab-1'),
+            dcc.Tab(label='Calibracion RC', value='tab-2'),
+            dcc.Tab(label='Control Automatico', value='tab-3'),
+        ]),
+        html.Div(id='tabs-example-content-1')
+    ])
+])
+\end{lstlisting}
+
+%==============================================================================
+\section{Pruebas de Funcionamiento}
+%==============================================================================
+
+\subsection{Verificación del Control Manual}
+
+Las pruebas del sistema de control manual verificaron el correcto funcionamiento de los tres botones de control y su efecto sobre las bombas. Se realizaron múltiples ciclos de llenado y vaciado para comprobar la respuesta del sistema en diferentes condiciones de operación.
+
+Al pulsar el botón de llenado, se observó la activación inmediata de la bomba correspondiente, evidenciada por el aumento progresivo del peso mostrado en la interfaz y el llenado visible del indicador gráfico del depósito. El comportamiento del botón de vaciado fue análogo, con la activación de la bomba de extracción y la correspondiente disminución del nivel.
+
+El botón de parada demostró ser efectivo en todas las situaciones probadas, deteniendo inmediatamente cualquier operación en curso independientemente del estado anterior del sistema. Esta fiabilidad es especialmente importante desde el punto de vista de la seguridad, garantizando que el operador siempre puede detener el sistema cuando lo considere necesario.
+
+Los resultados específicos de las pruebas fueron:
+
+\begin{itemize}
+    \item \textbf{Tiempo de respuesta}: $<$ 0.5s desde clic hasta movimiento de agua
+    \item \textbf{Botón de parada}: Efectivo en todas las situaciones probadas
+    \item \textbf{Actualización visual}: Indicador gráfico refleja cambios correctamente
+\end{itemize}
+
+\subsection{Evaluación de la Calibración}
+
+El proceso de calibración automatizado se sometió a múltiples ejecuciones para evaluar su reproducibilidad y la calidad de los modelos generados. Las pruebas se realizaron con diferentes números de puntos de calibración, desde un mínimo de cinco hasta un máximo de veinte, para evaluar el impacto de este parámetro en la precisión del modelo resultante.
+
+La visualización de los puntos de calibración en la gráfica mostró una relación aproximadamente lineal entre la integral del sensor RC y el peso de la báscula, aunque con cierta dispersión que refleja el ruido inherente a las medidas. Esta linealidad simplifica la interpretación del modelo y sugiere que el sensor RC tiene un comportamiento predecible en el rango de operación del sistema.
+
+La validación del modelo se realizó comparando las estimaciones de peso basadas en el sensor RC con las lecturas directas de la báscula durante operaciones de llenado y vaciado. Los errores observados fueron aceptables para la mayoría de las aplicaciones prácticas, aunque ligeramente superiores a los de la báscula directa.
+
+Los resultados de las pruebas de calibración con 10 puntos fueron:
+
+\begin{table}[H]
+\centering
+\caption{Resultados de calibración}
+\begin{tabular}{@{}lc@{}}
+\toprule
+\textbf{Métrica} & \textbf{Valor} \\
+\midrule
+Tiempo de proceso & $\sim$8 minutos \\
+Coeficiente $R^2$ & $>$ 0.99 \\
+Error típico (RMSE) & $<$ 5g \\
+Relación observada & Aproximadamente lineal \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Comportamiento del Control Automático}
+
+Las pruebas del sistema de control automático evaluaron su capacidad para mantener el nivel en diferentes consignas y su respuesta ante perturbaciones. Se realizaron pruebas tanto con la báscula como con el sensor RC como fuente de realimentación, comparando el comportamiento en ambos casos.
+
+Partiendo de un depósito vacío y estableciendo una consigna de 400g, el sistema activó automáticamente el llenado hasta alcanzar la zona de tolerancia, momento en el que detuvo la bomba. Una vez estabilizado el nivel, se introdujeron perturbaciones manuales extrayendo o añadiendo pequeñas cantidades de agua, y se observó cómo el sistema detectaba estas perturbaciones y actuaba para corregirlas.
+
+Las pruebas con el sensor RC como fuente de realimentación mostraron un comportamiento similar, aunque con una mayor variabilidad en el nivel estabilizado debido a la menor precisión de las estimaciones del sensor capacitivo. No obstante, el sistema fue capaz de mantener el nivel dentro de márgenes aceptables para la mayoría de las aplicaciones prácticas.
+
+Los resultados específicos de las pruebas fueron:
+
+\begin{itemize}
+    \item \textbf{Tiempo hasta consigna}: $\sim$30 segundos
+    \item \textbf{Respuesta a perturbaciones}: $\sim$2 segundos (limitado por intervalo de muestreo)
+    \item \textbf{Estabilidad}: Nivel mantenido dentro de banda $\pm$10g
+    \item \textbf{Sensor RC}: Comportamiento similar con mayor variabilidad ($\pm$15g)
+\end{itemize}
+
+%==============================================================================
+\section{Conclusiones}
+%==============================================================================
+
+\subsection{Logros del Proyecto}
+
+El desarrollo de este tercer entregable ha culminado con éxito en la implementación de un sistema de instrumentación virtual completo y funcional. Los tres hitos planteados inicialmente se han alcanzado satisfactoriamente, demostrando la viabilidad del enfoque adoptado y la adecuación de las tecnologías seleccionadas.
+
+La interfaz de usuario desarrollada con Dash proporciona una experiencia de operación moderna y accesible, permitiendo controlar y monitorizar el sistema desde cualquier dispositivo con un navegador web. La organización en pestañas facilita el acceso a las diferentes funcionalidades sin sobrecargar la interfaz, y los indicadores visuales proporcionan información clara sobre el estado del sistema en todo momento.
+
+El proceso de calibración automatizado representa una aportación significativa que permite utilizar el sensor capacitivo RC como alternativa viable a la báscula. La posibilidad de calibrar el sensor de forma interactiva, con visualización en tiempo real del progreso y los resultados, facilita enormemente esta tarea que de otro modo requeriría procedimientos manuales tediosos y propensos a errores.
+
+En resumen, los logros principales del proyecto son:
+
+\begin{enumerate}
+    \item La interfaz Dash proporciona una experiencia de operación moderna y accesible desde cualquier navegador
+    \item El proceso de calibración automatizado permite utilizar el sensor RC como alternativa viable
+    \item El control automático mantiene el nivel dentro de márgenes aceptables para aplicaciones prácticas
+\end{enumerate}
+
+\subsection{Integración Hardware-Software}
+
+Uno de los aspectos más destacables del proyecto es la integración exitosa de componentes hardware y software de diferentes naturalezas. El Arduino proporciona una plataforma de bajo coste y fácil programación para la interfaz con sensores y actuadores, mientras que la Red Pitaya aporta capacidades de adquisición de señales de alta frecuencia que serían difíciles de conseguir con un microcontrolador convencional.
+
+La aplicación Dash actúa como elemento integrador, coordinando la comunicación con ambos dispositivos y presentando la información de forma unificada al usuario. El uso del protocolo SCPI proporciona una capa de abstracción que facilita la comunicación y permite futuras extensiones o sustituciones de los dispositivos hardware con un impacto mínimo en el software de control.
+
+La arquitectura desarrollada demuestra que es posible construir sistemas de instrumentación potentes y versátiles combinando componentes accesibles y herramientas de código abierto, sin necesidad de recurrir a soluciones comerciales costosas y cerradas.
+
+El proyecto demuestra la integración exitosa de:
+\begin{itemize}
+    \item Arduino NANO como plataforma de bajo coste para interfaz con sensores/actuadores
+    \item Red Pitaya para adquisición de señales de alta frecuencia
+    \item Dash como elemento integrador con protocolo SCPI como capa de abstracción
+\end{itemize}
+
+\subsection{Posibilidades de Mejora}
+
+Aunque el sistema desarrollado cumple con los objetivos planteados, existen múltiples direcciones en las que podría mejorarse en trabajos futuros. Estas mejoras abarcan tanto aspectos de la lógica de control como de la interfaz de usuario y las capacidades de almacenamiento y análisis de datos.
+
+La implementación de algoritmos de control más avanzados, como el control proporcional-integral-derivativo (PID), permitiría mejorar la respuesta dinámica del sistema y reducir el error en régimen permanente. Este tipo de control requeriría ajustar varios parámetros (ganancia proporcional, tiempo integral, tiempo derivativo), lo que podría facilitarse mediante una interfaz de sintonización automática.
+
+La incorporación de capacidades de almacenamiento de datos mediante una base de datos permitiría mantener un registro histórico de las operaciones del sistema, facilitando el análisis posterior y la detección de tendencias o anomalías. Esta funcionalidad sería especialmente útil en aplicaciones industriales donde la trazabilidad es un requisito importante.
+
+Las principales líneas de trabajo futuro identificadas son:
+
+\begin{itemize}
+    \item \textbf{Control PID}: Mejorar respuesta dinámica y reducir error en régimen permanente
+    \item \textbf{Base de datos}: Registro histórico para análisis y trazabilidad
+    \item \textbf{Sistema de alertas}: Notificaciones ante condiciones anómalas
+    \item \textbf{Exportación de datos}: Formatos CSV/Excel para análisis externo
+\end{itemize}
+
+%==============================================================================
+\appendix
+\section{Requisitos del Sistema}
+%==============================================================================
+
+\subsection{Software}
+
+\begin{table}[H]
+\centering
+\caption{Dependencias de software}
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{Paquete} & \textbf{Versión} & \textbf{Función} \\
+\midrule
+Python & $\geq$ 3.8 & Entorno de ejecución \\
+Dash & $\geq$ 2.0 & Framework interfaz web \\
+Plotly & $\geq$ 5.0 & Gráficas interactivas \\
+NumPy & $\geq$ 1.20 & Procesamiento numérico \\
+SciPy & $\geq$ 1.7 & Funciones de interpolacion \\
+PySerial & $\geq$ 3.5 & Comunicación serie \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Instalación:
+\begin{lstlisting}[language=bash, caption=Instalación de dependencias]
+pip install dash plotly numpy scipy pyserial
+\end{lstlisting}
+
+\subsection{Hardware}
+
+\begin{itemize}
+    \item Arduino NANO con firmware cargado
+    \item Báscula HX711 conectada y calibrada
+    \item Red Pitaya accesible en red (\texttt{rp-f082af.local})
+    \item Sistema de bombas con driver conectado a pines Arduino
+\end{itemize}
+
+\subsection{Ejecución}
+
+\begin{lstlisting}[language=bash, caption=Inicio de la aplicación]
+python InterfazWeb.py
+# Acceder en navegador: http://localhost:8050
+\end{lstlisting}
+
+\end{document}
