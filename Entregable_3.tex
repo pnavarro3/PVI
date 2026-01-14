@@ -437,7 +437,7 @@ La siguiente tabla compara las características de ambos sensores:
 \toprule
 \textbf{Característica} & \textbf{Báscula} & \textbf{Sensor RC} \\
 \midrule
-Precisión típica & $\pm$2g & $\pm$5g (tras calibración) \\
+Precisión típica & $\pm$2g & $\pm$15g (tras calibración) \\
 Requiere calibración & No (solo tarado) & Sí \\
 Contacto con líquido & Indirecto & Sin contacto \\
 Velocidad respuesta & Alta & Media \\
@@ -457,7 +457,7 @@ La visualización del proceso se realiza mediante una gráfica temporal que mues
 Los elementos principales de configuración son:
 
 \begin{itemize}
-    \item \textbf{Campo consigna}: Valor objetivo en gramos (rango: 0-800g)
+    \item \textbf{Campo consigna}: Valor objetivo en gramos (rango: 0-600g)
     \item \textbf{Selector sensor}: Báscula o RC (RC deshabilitado si no hay calibración)
     \item \textbf{Botones RUN/STOP}: Control del proceso automático
 \end{itemize}
@@ -557,13 +557,13 @@ Esta organización permite modificar la interfaz de usuario sin afectar a la ló
 \caption{Archivos del proyecto}
 \begin{tabular}{@{}llp{6cm}@{}}
 \toprule
-\textbf{Archivo} & \textbf{Líneas} & \textbf{Función} \\
+\textbf{Archivo} & \textbf{Función} \\
 \midrule
-\texttt{InterfazWeb.py} & $\sim$1180 & Aplicación Dash principal (layout + callbacks) \\
-\texttt{ComWeb.py} & $\sim$80 & Funciones comunicación SCPI con Arduino \\
-\texttt{redpitaya\_scpi.py} & $\sim$50 & Clase comunicación TCP/IP Red Pitaya \\
-\texttt{PruebaSCPI.ino} & $\sim$200 & Firmware Arduino (parser + control) \\
-\texttt{assets/styles.css} & $\sim$100 & Estilos CSS de la interfaz \\
+\texttt{InterfazWeb.py} & Aplicación Dash principal (layout + callbacks) \\
+\texttt{ComWeb.py} & Funciones comunicación SCPI con Arduino \\
+\texttt{redpitaya\_scpi.py} & Clase comunicación TCP/IP Red Pitaya \\
+\texttt{PruebaSCPI.ino} & Firmware Arduino (parser + control) \\
+\texttt{assets/styles.css} & Estilos CSS de la interfaz \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -681,8 +681,6 @@ Las pruebas con el sensor RC como fuente de realimentación mostraron un comport
 Los resultados específicos de las pruebas fueron:
 
 \begin{itemize}
-    \item \textbf{Tiempo hasta consigna}: $\sim$30 segundos
-    \item \textbf{Respuesta a perturbaciones}: $\sim$2 segundos (limitado por intervalo de muestreo)
     \item \textbf{Estabilidad}: Nivel mantenido dentro de banda $\pm$10g
     \item \textbf{Sensor RC}: Comportamiento similar con mayor variabilidad ($\pm$15g)
 \end{itemize}
