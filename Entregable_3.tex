@@ -68,10 +68,6 @@
 \maketitle
 \thispagestyle{empty}
 
-\begin{abstract}
-Este documento presenta el desarrollo de un sistema de instrumentación virtual para la monitorización, calibración y control automático de nivel de un depósito de agua. El sistema integra una interfaz HMI desarrollada en Python con Dash, un Arduino UNO para la adquisición y actuación, y una Red Pitaya para el procesamiento del sensor capacitivo RC. El trabajo representa la culminación de los entregables anteriores, evolucionando hacia un instrumento virtual completo con capacidades de calibración automática y control en lazo cerrado.
-\end{abstract}
-
 \newpage
 \tableofcontents
 \newpage
@@ -649,7 +645,7 @@ La visualización de los puntos de calibración en la gráfica mostró una relac
 
 La validación del modelo se realizó comparando las estimaciones de peso basadas en el sensor RC con las lecturas directas de la báscula durante operaciones de llenado y vaciado. Los errores observados fueron aceptables para la mayoría de las aplicaciones prácticas, aunque ligeramente superiores a los de la báscula directa.
 
-Los resultados de las pruebas de calibración con 10 puntos fueron:
+Los resultados de las pruebas de calibración con 16 puntos fueron:
 
 \begin{table}[H]
 \centering
@@ -658,9 +654,9 @@ Los resultados de las pruebas de calibración con 10 puntos fueron:
 \toprule
 \textbf{Métrica} & \textbf{Valor} \\
 \midrule
-Tiempo de proceso & $\sim$8 minutos \\
+Tiempo de proceso & $\sim$5 minutos \\
 Coeficiente $R^2$ & $>$ 0.99 \\
-Error típico (RMSE) & $<$ 5g \\
+Error típico (RMSE) & $<$ 15g \\
 Relación observada & Aproximadamente lineal \\
 \bottomrule
 \end{tabular}
@@ -734,50 +730,5 @@ Las principales líneas de trabajo futuro identificadas son:
     \item \textbf{Sistema de alertas}: Notificaciones ante condiciones anómalas
     \item \textbf{Exportación de datos}: Formatos CSV/Excel para análisis externo
 \end{itemize}
-
-%==============================================================================
-\appendix
-\section{Requisitos del Sistema}
-%==============================================================================
-
-\subsection{Software}
-
-\begin{table}[H]
-\centering
-\caption{Dependencias de software}
-\begin{tabular}{@{}lll@{}}
-\toprule
-\textbf{Paquete} & \textbf{Versión} & \textbf{Función} \\
-\midrule
-Python & $\geq$ 3.8 & Entorno de ejecución \\
-Dash & $\geq$ 2.0 & Framework interfaz web \\
-Plotly & $\geq$ 5.0 & Gráficas interactivas \\
-NumPy & $\geq$ 1.20 & Procesamiento numérico \\
-SciPy & $\geq$ 1.7 & Funciones de interpolacion \\
-PySerial & $\geq$ 3.5 & Comunicación serie \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-Instalación:
-\begin{lstlisting}[language=bash, caption=Instalación de dependencias]
-pip install dash plotly numpy scipy pyserial
-\end{lstlisting}
-
-\subsection{Hardware}
-
-\begin{itemize}
-    \item Arduino NANO con firmware cargado
-    \item Báscula HX711 conectada y calibrada
-    \item Red Pitaya accesible en red (\texttt{rp-f082af.local})
-    \item Sistema de bombas con driver conectado a pines Arduino
-\end{itemize}
-
-\subsection{Ejecución}
-
-\begin{lstlisting}[language=bash, caption=Inicio de la aplicación]
-python InterfazWeb.py
-# Acceder en navegador: http://localhost:8050
-\end{lstlisting}
 
 \end{document}
