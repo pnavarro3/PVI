@@ -125,7 +125,7 @@ app = dash.Dash(__name__)
 app.layout = html.Div([
     html.H1("Sistema de control de volumen"),
 
-    dcc.Interval(id='interval-peso', interval=2000, disabled=True),  # 1 segundo, desactivado inicialmente
+    dcc.Interval(id='interval-peso', interval=2000, disabled=True), 
     dcc.Interval(id='interval-calibracion', interval=2000, disabled=True),  # Para calibración
     dcc.Interval(id='interval-control', interval=2000, disabled=True),  # Para control automático
     dcc.Store(id='store-llenando', data=False),  # Almacena el estado
